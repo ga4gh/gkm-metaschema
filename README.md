@@ -8,7 +8,7 @@ reStructuredText (RST) and JSON files.
 
 Currently used in:
 
-* [GKS-Core](https://github.com/ga4gh/gks-core)
+* [GKM-Core](https://github.com/ga4gh/gkm-core)
 * [VRS](https://github.com/ga4gh/vrs)
 * [VA-Spec](https://github.com/ga4gh/va-spec/)
 * [Cat-VRS](https://github.com/ga4gh/cat-vrs)
