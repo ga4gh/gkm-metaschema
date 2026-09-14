@@ -192,10 +192,9 @@ Why the distinction matters:
   - Abstract classes are flagged with an **Abstract Class** notation.
   - **`allOf`-composed** classes (recipes/profiles) render a **flattened
     effective-property table**: the base class's properties overlaid with the
-    subclass's refinements, with refined properties marked and their **narrowed
-    type** shown (e.g. a `contains` constraint's specific member type), plus a
-    note naming the base(s) the class refines. `oneOf`/`anyOf` unions render a
-    "one of / any of the following" summary.
+    subclass's local properties, showing each property's effective (**narrowed**)
+    type (e.g. a `contains` constraint's specific member type). `oneOf`/`anyOf`
+    unions render a "one of / any of the following" summary.
   - Each class table is followed by **Used in:** (classes that reference it via
     `$ref`/`$refCurie`) and **Subclasses:** (classes whose `inherits` resolves
     to it) cross-reference lists.

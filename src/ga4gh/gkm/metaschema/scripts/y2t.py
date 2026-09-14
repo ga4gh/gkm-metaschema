@@ -272,41 +272,35 @@ def flatten_allof(class_definition: dict, proc: YamlSchemaProcessor):
     """Flatten an allOf-composed class to its effective property set.
 
     Overlays each referenced base class's properties (in order) with the local
-    ``properties`` refinements. Returns (effective_properties, refined_names,
-    sorted_required, base_class_names). Refined/added names win but keep the
-    position they hold in the base (superclass-first ordering).
+    ``properties``. Returns (effective_properties, sorted_required). Local/added
+    names win but keep the position they hold in the base (superclass-first
+    ordering).
     """
     registry = _class_registry(proc)
     effective: dict = {}
-    refined: set = set()
     required: set = set()
-    bases: list = []
     for member in class_definition.get("allOf", []):
         base_name = _ref_class_name(member)
         if base_name and base_name in registry:
             base = registry[base_name]
-            bases.append(base_name)
             for name, attribs in base.get("properties", {}).items():
                 effective.setdefault(name, attribs)
             required.update(base.get("required", []))
         if "properties" in member:
             for name, attribs in member["properties"].items():
                 effective[name] = _merge_property(effective.get(name, {}), attribs)
-                refined.add(name)
             required.update(member.get("required", []))
     # fold in any properties declared directly on the class as well
     for name, attribs in class_definition.get("properties", {}).items():
         effective[name] = _merge_property(effective.get(name, {}), attribs)
-        refined.add(name)
     required.update(class_definition.get("required", []))
-    return effective, refined, sorted(required), bases
+    return effective, sorted(required)
 
 
-def render_information_model(f, properties: dict, required: list, note: str = "", refined=frozenset()) -> None:
+def render_information_model(f, properties: dict, required: list, note: str = "") -> None:
     """Render an Information Model list-table for a property set.
 
-    Shared by ordinary classes and allOf-composed classes. ``refined`` names are
-    flagged so a reader can see which fields a recipe/profile constrained.
+    Shared by ordinary classes and allOf-composed classes.
     """
     if not properties:
         return
@@ -328,9 +322,8 @@ def render_information_model(f, properties: dict, required: list, note: str = ""
     )
     synthetic = {"required": required}
     for name, attribs in properties.items():
-        field = f"{name} *(refined)*" if name in refined else name
         row = f"""\
-   *  - {field}
+   *  - {name}
       - {resolve_flags(attribs)}
       - {resolve_type(attribs)}
       - {resolve_cardinality(name, attribs, synthetic)}
@@ -484,13 +477,10 @@ def render_class(
 
         print("\n**Information Model**", file=f)
         if "allOf" in class_definition:
-            # allOf = refinement: show the effective (flattened) property table.
-            effective, refined, required, bases = flatten_allof(class_definition, proc)
+            # allOf = composition: show the effective (flattened) property table.
+            effective, required = flatten_allof(class_definition, proc)
             if effective:
-                note = ""
-                if bases:
-                    note = "This class refines " + ", ".join(f":ref:`{b}`" for b in bases) + ".\n"
-                render_information_model(f, effective, required, note, refined)
+                render_information_model(f, effective, required)
             else:
                 composition = resolve_composition(class_definition)
                 if composition:
