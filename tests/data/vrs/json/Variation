@@ -55,6 +55,32 @@
    "discriminator": {
       "propertyName": "type"
    },
+   "oneOf": [
+      {
+         "$ref": "/ga4gh/schema/vrs/1.0.0-msp.test/json/Adjacency"
+      },
+      {
+         "$ref": "/ga4gh/schema/vrs/1.0.0-msp.test/json/Allele"
+      },
+      {
+         "$ref": "/ga4gh/schema/vrs/1.0.0-msp.test/json/CisPhasedBlock"
+      },
+      {
+         "$ref": "/ga4gh/schema/vrs/1.0.0-msp.test/json/CopyNumberChange"
+      },
+      {
+         "$ref": "/ga4gh/schema/vrs/1.0.0-msp.test/json/CopyNumberCount"
+      },
+      {
+         "$ref": "/ga4gh/schema/vrs/1.0.0-msp.test/json/DerivativeMolecule"
+      },
+      {
+         "$ref": "/ga4gh/schema/vrs/1.0.0-msp.test/json/RelativeAllele"
+      },
+      {
+         "$ref": "/ga4gh/schema/vrs/1.0.0-msp.test/json/Terminus"
+      }
+   ],
    "ga4gh": {
       "inherent": [
          "type"

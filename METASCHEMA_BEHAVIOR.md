@@ -208,9 +208,12 @@ Why the distinction matters:
     subclass's local properties, showing each property's effective (**narrowed**)
     type (e.g. a `contains` constraint's specific member type). `oneOf`/`anyOf`
     unions render a "one of / any of the following" summary.
-  - Each class table is followed by **Used in:** (classes that reference it via
-    `$ref`/`$refCurie`) and **Subclasses:** (classes whose `inherits` resolves
-    to it) cross-reference lists.
+  - Each class table is followed by **Inherits:** (the class's own direct
+    `inherits` target, if any — a cross-schema `namespace:Class` value
+    resolves to the bare class name), **Subclasses:** (classes whose
+    `inherits` resolves to it — the mirror of **Inherits:**, immediately
+    below it), and **Used in:** (classes that reference it via
+    `$ref`/`$refCurie`) cross-reference lists.
   - A **GA4GH Digest** section (prefix + inherent properties) is rendered for
     **concrete** GA4GH-identifiable classes only. Abstract classes omit it even
     when they carry/inherit a `ga4gh` block, since they are never instantiated —
@@ -271,6 +274,71 @@ space:
 Non-profile sources are unaffected: their outputs and `$id`s continue to derive
 from the source's own location / `$id` (e.g. `va-core-source.yaml` at
 `va-spec/` emits to `va-spec/json` with `$id` `.../<version>/json/<Class>`).
+
+## 10. Sealed abstract classes (`sealed`)
+
+By default, a `$ref`/`$refCurie` to an **abstract** class stays a direct
+`$ref` — it validates *any* structurally-conforming subclass instance,
+including ones the schema doesn't know about yet (see [§6](#6-references)).
+That's the right default for an extensible type: it doesn't foreclose
+downstream schemas defining new subclasses. Some abstract classes, though,
+really do represent a **closed, fully-known set of subtypes** — every
+subclass that will ever exist is already declared in the same file, and a
+reference site should be restricted to exactly that set. `sealed: true` opts
+a class into that narrower contract:
+
+- **Only meaningful on an `abstract` class.** Setting `sealed: true` on a
+  concrete class raises a `ValueError`.
+- **Auto-derives a `oneOf`** from the class's own subclass tree (`inherits:`,
+  resolved transitively, same-source only — a cross-source `inherits:
+  namespace:Class` isn't counted, matching [§2](#2-inheritance-inherits)'s
+  general rule). Only **concrete** descendants are listed; an abstract
+  intermediate is skipped in favor of its own concrete descendants, since an
+  abstract member's open contract would let a value double-match under
+  `oneOf`'s "exactly one" requirement. A sealed class with **zero** concrete
+  descendants raises — an empty `oneOf` can never be satisfied.
+- **Mutually exclusive with a hand-authored `oneOf`/`anyOf`/`allOf`** on the
+  same class — combining an auto-derived union with a manual one is
+  ambiguous, and raises.
+- **Materialized before any other processing runs**, so a sealed class is
+  indistinguishable from a hand-authored container class (one that declares
+  its own `oneOf`/`anyOf`/`allOf` directly) to everything downstream:
+  `class_is_container`, the split per-class `json/` output, and `y2t`'s RST
+  rendering (which renders the closed union as a "must match one of the
+  following" list, alongside the class's own property table and
+  **Subclasses:** cross-references) all just work, unchanged.
+- **`sealed` itself is stripped** from the emitted JSON Schema once
+  materialized into `oneOf` — like the other metaschema-only keywords, it
+  carries no further information for a consumer of the output.
+- **Idempotent.** Resolution runs again whenever `_init_from_raw` does —
+  which happens more than once on the same class in two situations:
+  `merge_imported()` re-derives everything after merging in every import's
+  `raw_defs`, and `import_dependencies` builds one `YamlSchemaProcessor`
+  instance *per import edge*, so the same file (and the same sealed class in
+  it) can be independently resolved more than once and then merged together
+  by `merge_imported()`. An internal marker on the class's raw def (stripped
+  like `sealed` itself) records that its `oneOf` was already derived, so a
+  repeat pass is a no-op instead of tripping the "already has `oneOf`"
+  conflict guard against its own previously-derived union.
+- **`y2t`'s RST** carries an explanatory **Sealed** note (alongside the
+  **Abstract Class** note) spelling out the restriction in prose, since
+  "must match one of the following" on its own doesn't say *why* the list is
+  exhaustive.
+- **Used in:/Subclasses: stay accurate for transitively-sealed hierarchies.**
+  A sealed class's `oneOf` can `$ref` a *grandchild* class (reached through
+  an abstract intermediate — e.g. `Variation`, sealed, directly `$ref`s
+  `Allele`, whose actual parent is the abstract `MolecularVariation`).
+  Without accounting for this, that `$ref` would show up as a spurious
+  **Used in:** `Variation` entry on `Allele`'s page, duplicating the
+  **Subclasses:** relationship already shown on `MolecularVariation`'s page.
+  `build_cross_references`'s existing "skip the container's own subclass
+  enumeration" rule (see [§8](#8-outputs)) was extended from a direct
+  parent/child check to a transitive one to cover this.
+
+Sealing a class is a **non-breaking, purely additive** change from the
+perspective of anything that references it: every existing `$ref`/`$refCurie`
+pointing at the sealed class keeps working exactly as written — only the
+sealed class's *own* emitted schema gains the `oneOf`.
 
 ---
 
@@ -359,3 +427,18 @@ Behaviors intentionally **removed / changed** during the migration:
   stripped behavior — `class_is_abstract()` and everything built on it read
   the flag from the raw source schema, not from `for_js` — so this only
   changes what a consumer of the per-class JSON can observe.
+- **`sealed` reintroduces, as an opt-in, the concretize-to-`oneOf` behavior**
+  the "Abstract classes were previously pruned... or collapsed into a `oneOf`
+  union" note above describes being removed. The old behavior applied
+  unconditionally to every abstract class's *reference sites*; `sealed` is
+  the opposite shape — a per-class opt-in that changes only the sealed
+  class's *own* emitted schema (every existing `$ref` to it keeps working
+  unchanged) — see [§10](#10-sealed-abstract-classes-sealed).
+- Every class's `.rst` now carries an **Inherits:** line (its own direct
+  `inherits` target, resolving a cross-schema `namespace:Class` value to the
+  bare class name) immediately above **Subclasses:** — the mirror relation
+  (a class's parent vs. its children) is now shown symmetrically, where
+  previously only the "Some `X` attributes are inherited from `Y`" preface
+  sentence on the property table hinted at the parent, and only for classes
+  that render a property table at all (passthrough and primitive classes had
+  no inheritance mention whatsoever).

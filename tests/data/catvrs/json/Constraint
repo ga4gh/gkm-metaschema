@@ -14,5 +14,28 @@
    },
    "required": [
       "type"
+   ],
+   "oneOf": [
+      {
+         "$ref": "/ga4gh/schema/cat-vrs/1.0.0-msp.test/json/AdjacencyConstraint"
+      },
+      {
+         "$ref": "/ga4gh/schema/cat-vrs/1.0.0-msp.test/json/CopyChangeConstraint"
+      },
+      {
+         "$ref": "/ga4gh/schema/cat-vrs/1.0.0-msp.test/json/CopyCountConstraint"
+      },
+      {
+         "$ref": "/ga4gh/schema/cat-vrs/1.0.0-msp.test/json/DefiningAlleleConstraint"
+      },
+      {
+         "$ref": "/ga4gh/schema/cat-vrs/1.0.0-msp.test/json/DefiningLocationConstraint"
+      },
+      {
+         "$ref": "/ga4gh/schema/cat-vrs/1.0.0-msp.test/json/FeatureContextConstraint"
+      },
+      {
+         "$ref": "/ga4gh/schema/cat-vrs/1.0.0-msp.test/json/FunctionConstraint"
+      }
    ]
 }

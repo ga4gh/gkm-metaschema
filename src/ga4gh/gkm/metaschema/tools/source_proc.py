@@ -66,6 +66,9 @@ class YamlSchemaProcessor:
         self._init_from_raw()
 
     _PROFILE_SUFFIX = "-profile-source.yaml"
+    # Internal marker set on a sealed class's raw def once its oneOf has been
+    # derived -- see _resolve_sealed_classes. Stripped in clean_for_js.
+    _SEALED_MARKER = "_sealed_derived_oneOf"
 
     def _profile_sub_namespace(self):
         """Sub-namespace ``XXX`` for a ``XXX-profile-source.yaml`` file, else None.
@@ -93,6 +96,7 @@ class YamlSchemaProcessor:
         return xxx_file
 
     def _init_from_raw(self):
+        self._resolve_sealed_classes()
         self.has_children_urls = {}
         self.has_children = {}
         self.build_inheritance_dicts()
@@ -104,6 +108,93 @@ class YamlSchemaProcessor:
         self.check_processed_schema()
         self.for_js = copy.deepcopy(self.processed_schema)
         self.clean_for_js()
+
+    def _resolve_sealed_classes(self):
+        """Inject an auto-derived ``oneOf`` into every ``sealed: true``
+        abstract class, listing its concrete descendants (resolved
+        transitively through ``inherits``). This makes a $ref/$refCurie to
+        the class site-restrictive -- validating against one of a known,
+        closed set of concrete subclasses -- instead of the open contract an
+        abstract class has by default.
+
+        Mutates ``self.raw_schema`` in place, before ``build_inheritance_dicts``
+        runs, so the injected ``oneOf`` is picked up by the existing container
+        machinery (``class_is_container``, and y2t's composition rendering)
+        exactly as if it had been hand-authored -- no separate code path
+        needed for sealed classes anywhere downstream.
+
+        Uses its own local "who inherits from whom" map rather than
+        ``self.has_children`` (not built yet at this point in ``_init_from_raw``)
+        -- same-source only, matching ``build_inheritance_dicts``'s own rule
+        that a cross-source ``inherits: namespace:Class`` isn't registered.
+
+        Idempotent: a class already resolved carries the internal
+        ``_SEALED_MARKER`` key, so re-running this (``_init_from_raw`` runs a
+        second time from ``merge_imported()``) or merging in an
+        already-resolved class from a *different* processor instance's
+        ``raw_defs`` (``import_dependencies`` builds one instance per import
+        edge, so the same class can be independently resolved more than
+        once and then merged together) is a no-op rather than tripping the
+        "already has oneOf" conflict guard against its own previously-derived
+        oneOf. The marker lives on the dict itself (not instance state)
+        specifically so it survives that cross-instance ``dict.update()``
+        merge.
+        """
+        if self.raw_defs is None:
+            return
+        direct_children = defaultdict(set)
+        for cls, cls_def in self.raw_defs.items():
+            target = cls_def.get("inherits")
+            if target and ":" not in target:
+                direct_children[target].add(cls)
+
+        def concrete_descendants(cls, seen):
+            out = set()
+            for child in direct_children.get(cls, ()):
+                if child in seen:
+                    continue
+                seen.add(child)
+                if self.raw_defs[child].get("abstract", False):
+                    out |= concrete_descendants(child, seen)
+                else:
+                    out.add(child)
+            return out
+
+        for cls, cls_def in self.raw_defs.items():
+            if not cls_def.get("sealed", False):
+                continue
+            if cls_def.get(self._SEALED_MARKER, False):
+                continue
+            if not cls_def.get("abstract", False):
+                raise ValueError(
+                    f"Class '{cls}' sets 'sealed: true' but is not abstract. "
+                    "'sealed' restricts references to an abstract class's "
+                    "concrete subclasses, so it's only meaningful on an "
+                    f"abstract class. Fix: add 'abstract: true' to '{cls}', "
+                    "or remove 'sealed'."
+                )
+            if "oneOf" in cls_def or "anyOf" in cls_def or "allOf" in cls_def:
+                raise ValueError(
+                    f"Class '{cls}' sets 'sealed: true' but also declares its "
+                    "own 'oneOf'/'anyOf'/'allOf'. 'sealed' auto-derives that "
+                    "union from the class's subclasses, so hand-authoring one "
+                    f"at the same time is ambiguous. Fix: remove 'sealed' "
+                    f"from '{cls}' to hand-author the union yourself, or "
+                    "remove the hand-authored composition to let 'sealed' "
+                    "derive it."
+                )
+            descendants = sorted(concrete_descendants(cls, {cls}))
+            if not descendants:
+                raise ValueError(
+                    f"Class '{cls}' sets 'sealed: true' but has no concrete "
+                    "subclasses (directly or transitively via 'inherits'). A "
+                    "sealed class needs at least one concrete descendant, or "
+                    "every reference to it becomes unsatisfiable. Fix: define "
+                    f"a concrete class that inherits '{cls}', or remove "
+                    "'sealed'."
+                )
+            cls_def["oneOf"] = [{"$ref": f"#/{self.schema_def_keyword}/{d}"} for d in descendants]
+            cls_def[self._SEALED_MARKER] = True
 
     def build_inheritance_dicts(self):
         # For all classes:
@@ -696,9 +787,12 @@ class YamlSchemaProcessor:
         # appears (class level, properties, or nested composition branches).
         self._strip_key(self.for_js, "$comment")
         for schema_class, schema_definition in self.for_js.get(self.schema_def_keyword, {}).items():
-            # Every class (abstract included) is emitted as its own JSON Schema,
-            # and $refs stay direct (no concretization to oneOf of descendants).
-            # Strip metaschema-only keywords that are not valid JSON Schema.
+            # Every class (abstract included) is emitted as its own JSON
+            # Schema, and $refs stay direct -- unless the class opted into
+            # `sealed`, in which case `_resolve_sealed_classes` already
+            # rewrote it to a `oneOf` of its concrete descendants before this
+            # runs. Strip metaschema-only keywords that are not valid JSON
+            # Schema.
             schema_definition.pop("inherits", None)
             schema_definition.pop("protectedClassOf", None)
             # `abstract` is preserved (as `true`) only on classes that are
@@ -708,6 +802,11 @@ class YamlSchemaProcessor:
             # unknown keywords are ignored by validators, not rejected.
             if not schema_definition.get("abstract", False):
                 schema_definition.pop("abstract", None)
+            # `sealed` is fully materialized into `oneOf` by this point, so
+            # the flag itself carries no further information for a consumer
+            # of the emitted schema.
+            schema_definition.pop("sealed", None)
+            schema_definition.pop(self._SEALED_MARKER, None)
             schema_definition.pop("header_level", None)
             if "description" in schema_definition:
                 schema_definition["description"] = self._scrub_rst_markup(schema_definition["description"])

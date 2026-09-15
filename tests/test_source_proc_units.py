@@ -79,10 +79,11 @@ def test_resolve_curie_unknown_namespace_raises(vrs_processor: YamlSchemaProcess
 @pytest.mark.parametrize(
     "cls,abstract,primitive,container,ga4gh_identifiable",
     [
-        ("Ga4ghIdentifiableObject", True, False, False, False),
         # abstract, but no class-level oneOf/anyOf -> not a container
-        ("Variation", True, False, False, False),
-        ("Location", True, False, False, False),
+        ("Ga4ghIdentifiableObject", True, False, False, False),
+        # abstract + sealed -> auto-derived oneOf -> a container
+        ("Variation", True, False, True, False),
+        ("Location", True, False, True, False),
         ("Allele", False, False, False, True),
         ("SequenceLocation", False, False, False, True),
         ("Expression", False, False, False, False),
@@ -283,3 +284,139 @@ def test_external_path_ref_is_rejected(tmp_path):
 def test_local_ref_is_allowed(tmp_path):
     proc = _build_ref_schema(tmp_path, "#/$defs/Other")
     assert proc.for_js["$defs"]["Main"]["properties"]["other"]["$ref"] == "#/$defs/Other"
+
+
+# --------------------------------------------------------------------------
+# `sealed: true` on an abstract class auto-derives a `oneOf` of its concrete
+# descendants, restricting $ref/$refCurie sites to a closed, known set
+# instead of the open contract an abstract class has by default.
+# --------------------------------------------------------------------------
+
+
+def _build_sealed_schema(tmp_path, defs):
+    schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://example.org/schema/sealed/sealed-source.yaml",
+        "title": "Sealed",
+        "type": "object",
+        "$defs": defs,
+    }
+    fp = tmp_path / "sealed-source.yaml"
+    with open(fp, "w") as f:
+        yaml.safe_dump(schema, f)
+    return YamlSchemaProcessor(fp)
+
+
+_SHAPE_HIERARCHY = {
+    "Shape": {
+        "maturity": "draft",
+        "abstract": True,
+        "sealed": True,
+        "description": "A closed shape hierarchy.",
+        "properties": {"kind": {"type": "string", "description": "discriminator"}},
+        "required": ["kind"],
+    },
+    # Polygon is abstract and has no properties of its own -- it must NOT
+    # appear in Shape's oneOf (an open/abstract member would let anything
+    # matching its (empty) shape double-match, breaking oneOf's "exactly
+    # one" requirement); only its concrete descendant Square should.
+    "Polygon": {
+        "maturity": "draft",
+        "abstract": True,
+        "inherits": "Shape",
+        "description": "An abstract intermediate.",
+    },
+    "Circle": {
+        "maturity": "draft",
+        "inherits": "Shape",
+        "description": "A concrete circle.",
+        "properties": {"radius": {"type": "number", "description": "r"}},
+        "required": ["radius"],
+    },
+    "Square": {
+        "maturity": "draft",
+        "inherits": "Polygon",
+        "description": "A concrete square, reached transitively through Polygon.",
+        "properties": {"side": {"type": "number", "description": "s"}},
+        "required": ["side"],
+    },
+}
+
+
+def test_sealed_class_derives_oneof_of_concrete_descendants(tmp_path):
+    proc = _build_sealed_schema(tmp_path, _SHAPE_HIERARCHY)
+    shape = proc.for_js["$defs"]["Shape"]
+    assert shape["oneOf"] == [{"$ref": "#/$defs/Circle"}, {"$ref": "#/$defs/Square"}]
+    # Square is reached transitively through the abstract Polygon; Polygon
+    # itself (abstract, so uninstantiable) must not appear in the union.
+    refs = {member["$ref"] for member in shape["oneOf"]}
+    assert "#/$defs/Polygon" not in refs
+    # sealed is fully materialized into oneOf; the flag itself is stripped.
+    assert "sealed" not in shape
+    # abstract survives (see the abstract-in-JSON feature), own properties
+    # and type: object are untouched -- sealed only adds oneOf alongside them.
+    assert shape["abstract"] is True
+    assert shape["type"] == "object"
+    assert "kind" in shape["properties"]
+
+
+def test_sealed_on_non_abstract_class_is_rejected(tmp_path):
+    with pytest.raises(ValueError, match="not abstract"):
+        _build_sealed_schema(
+            tmp_path,
+            {"Foo": {"maturity": "draft", "sealed": True, "description": "x", "properties": {}}},
+        )
+
+
+@pytest.mark.parametrize("composition_kw", ["oneOf", "anyOf", "allOf"])
+def test_sealed_with_hand_authored_composition_is_rejected(tmp_path, composition_kw):
+    with pytest.raises(ValueError, match="ambiguous"):
+        _build_sealed_schema(
+            tmp_path,
+            {
+                "Foo": {
+                    "maturity": "draft",
+                    "abstract": True,
+                    "sealed": True,
+                    "description": "x",
+                    composition_kw: [{"$ref": "#/$defs/Bar"}],
+                },
+                "Bar": {"maturity": "draft", "description": "y", "properties": {}},
+            },
+        )
+
+
+def test_sealed_with_no_concrete_descendants_is_rejected(tmp_path):
+    with pytest.raises(ValueError, match="no concrete subclasses"):
+        _build_sealed_schema(
+            tmp_path,
+            {"Foo": {"maturity": "draft", "abstract": True, "sealed": True, "description": "x", "properties": {}}},
+        )
+
+
+def test_sealed_with_only_abstract_descendants_is_rejected(tmp_path):
+    """An abstract descendant alone doesn't satisfy 'at least one concrete
+    descendant' -- it can never itself be instantiated."""
+    with pytest.raises(ValueError, match="no concrete subclasses"):
+        _build_sealed_schema(
+            tmp_path,
+            {
+                "Foo": {"maturity": "draft", "abstract": True, "sealed": True, "description": "x", "properties": {}},
+                "Bar": {"maturity": "draft", "abstract": True, "inherits": "Foo", "description": "y"},
+            },
+        )
+
+
+def test_sealed_resolution_is_idempotent_across_reprocessing(tmp_path):
+    """_resolve_sealed_classes runs again whenever _init_from_raw does (e.g.
+    merge_imported() re-derives processed_schema/for_js after merging in
+    every import's raw_defs). A sealed class already resolved in an earlier
+    pass must not trip the "already has oneOf" conflict guard against its
+    own previously-derived oneOf -- regression test for a real bug where
+    merge_imported() raised on every sealed class.
+    """
+    proc = _build_sealed_schema(tmp_path, _SHAPE_HIERARCHY)
+    before = proc.for_js["$defs"]["Shape"]["oneOf"]
+    proc.merge_imported()  # re-invokes _init_from_raw on the same instance
+    after = proc.for_js["$defs"]["Shape"]["oneOf"]
+    assert after == before == [{"$ref": "#/$defs/Circle"}, {"$ref": "#/$defs/Square"}]
