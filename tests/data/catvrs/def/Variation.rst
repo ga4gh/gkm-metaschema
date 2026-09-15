@@ -88,6 +88,8 @@ This class must match **one of** the following:
 * :ref:`Terminus`
 
 
+**Inherits:** :ref:`Ga4ghIdentifiableObject`
+
 **Subclasses:** :ref:`MolecularVariation`, :ref:`SystemicVariation`
 
 **Used in:** :ref:`CategoricalVariant`

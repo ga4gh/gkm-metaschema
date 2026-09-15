@@ -208,9 +208,12 @@ Why the distinction matters:
     subclass's local properties, showing each property's effective (**narrowed**)
     type (e.g. a `contains` constraint's specific member type). `oneOf`/`anyOf`
     unions render a "one of / any of the following" summary.
-  - Each class table is followed by **Used in:** (classes that reference it via
-    `$ref`/`$refCurie`) and **Subclasses:** (classes whose `inherits` resolves
-    to it) cross-reference lists.
+  - Each class table is followed by **Inherits:** (the class's own direct
+    `inherits` target, if any — a cross-schema `namespace:Class` value
+    resolves to the bare class name), **Subclasses:** (classes whose
+    `inherits` resolves to it — the mirror of **Inherits:**, immediately
+    below it), and **Used in:** (classes that reference it via
+    `$ref`/`$refCurie`) cross-reference lists.
   - A **GA4GH Digest** section (prefix + inherent properties) is rendered for
     **concrete** GA4GH-identifiable classes only. Abstract classes omit it even
     when they carry/inherit a `ga4gh` block, since they are never instantiated —
@@ -431,3 +434,11 @@ Behaviors intentionally **removed / changed** during the migration:
   the opposite shape — a per-class opt-in that changes only the sealed
   class's *own* emitted schema (every existing `$ref` to it keeps working
   unchanged) — see [§10](#10-sealed-abstract-classes-sealed).
+- Every class's `.rst` now carries an **Inherits:** line (its own direct
+  `inherits` target, resolving a cross-schema `namespace:Class` value to the
+  bare class name) immediately above **Subclasses:** — the mirror relation
+  (a class's parent vs. its children) is now shown symmetrically, where
+  previously only the "Some `X` attributes are inherited from `Y`" preface
+  sentence on the property table hinted at the parent, and only for classes
+  that render a property table at all (passthrough and primitive classes had
+  no inheritance mention whatsoever).

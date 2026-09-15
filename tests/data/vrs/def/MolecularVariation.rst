@@ -23,4 +23,6 @@ This class must match **one of** the following:
 * :ref:`Terminus`
 
 
+**Inherits:** :ref:`Variation`
+
 **Subclasses:** :ref:`Adjacency`, :ref:`Allele`, :ref:`CisPhasedBlock`, :ref:`DerivativeMolecule`, :ref:`RelativeAllele`, :ref:`Terminus`

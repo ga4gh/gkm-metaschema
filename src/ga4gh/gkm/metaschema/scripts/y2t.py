@@ -456,8 +456,16 @@ def build_cross_references(owners: dict):
     return used_in, subclasses
 
 
-def _print_xrefs(f, class_name: str, used_in: dict, subclasses: dict) -> None:
-    """Append 'Subclasses:' and 'Used in:' :ref: lists for a class."""
+def _print_xrefs(f, proc: YamlSchemaProcessor, class_name: str, used_in: dict, subclasses: dict) -> None:
+    """Append 'Inherits:', 'Subclasses:', and 'Used in:' :ref: lists for a
+    class. 'Inherits:' shows the class's own direct 'inherits' target (if
+    any) -- the mirror of 'Subclasses:', which shows its direct children --
+    so it's printed immediately above it, regardless of the class's shape
+    (passthrough, primitive, or a normal properties/composition class all
+    call this)."""
+    inherits = proc.raw_defs[class_name].get("inherits")
+    if isinstance(inherits, str):
+        print("\n**Inherits:** :ref:`" + _ref_label(inherits) + "`", file=f)
     subs = sorted(subclasses.get(class_name, []))
     if subs:
         print("\n**Subclasses:** " + ", ".join(f":ref:`{s}`" for s in subs), file=f)
@@ -499,7 +507,7 @@ def render_class(
             if composition:
                 print("\n**Information Model**\n", file=f)
                 print(composition, file=f)
-            _print_xrefs(f, class_name, used_in, subclasses)
+            _print_xrefs(f, proc, class_name, used_in, subclasses)
             return
         if "heritableProperties" in class_definition:
             p = "heritableProperties"
@@ -514,7 +522,7 @@ def render_class(
             p = None
             if not any(k in class_definition for k in ("allOf", "anyOf", "oneOf")):
                 if proc.class_is_primitive(class_name):
-                    _print_xrefs(f, class_name, used_in, subclasses)
+                    _print_xrefs(f, proc, class_name, used_in, subclasses)
                     return
                 raise ValueError(class_name, class_definition)
         ancestor = proc.raw_defs[class_name].get("inherits")
@@ -545,7 +553,7 @@ def render_class(
         composition = resolve_composition(class_definition)
         if composition:
             print("\n" + composition, file=f)
-        _print_xrefs(f, class_name, used_in, subclasses)
+        _print_xrefs(f, proc, class_name, used_in, subclasses)
 
 
 def main(proc_schema: YamlSchemaProcessor) -> None:

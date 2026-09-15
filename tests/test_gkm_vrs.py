@@ -152,6 +152,39 @@ def test_sealed_class_renders_explanatory_note(vrs_processor, tmp_path):
     assert "**Sealed**" not in unsealed_rst
 
 
+def test_inherits_note_precedes_subclasses(vrs_processor, tmp_path):
+    """A class's .rst notes its own direct 'inherits' target -- the mirror of
+    Subclasses: (its direct children) -- immediately above Subclasses:,
+    resolving a cross-schema 'namespace:Class' inherits value (e.g.
+    'gkm-core:Entity') to the bare class name. A class with no parent gets no
+    Inherits: line at all.
+    """
+    owners = {name: vrs_processor for name in vrs_processor.processed_schema[vrs_processor.schema_def_keyword]}
+    used_in, subclasses = build_cross_references(owners)
+
+    def render(class_name):
+        kw = vrs_processor.schema_def_keyword
+        class_def = vrs_processor.processed_schema[kw][class_name]
+        render_class(vrs_processor, class_name, class_def, tmp_path, used_in, subclasses)
+        return (tmp_path / f"{class_name}.rst").read_text()
+
+    # MolecularVariation both inherits (Variation) and has subclasses
+    # (Allele, ...) -- Inherits: must appear, and precede Subclasses:.
+    rst = render("MolecularVariation")
+    assert "**Inherits:** :ref:`Variation`" in rst
+    assert rst.index("**Inherits:**") < rst.index("**Subclasses:**")
+
+    # Ga4ghIdentifiableObject's raw 'inherits' is the cross-schema curie
+    # 'gkm-core:Entity'; the namespace prefix must be stripped for the :ref:.
+    cross_schema_rst = render("Ga4ghIdentifiableObject")
+    assert "**Inherits:** :ref:`Entity`" in cross_schema_rst
+
+    # Range has no 'inherits' at all -- no Inherits: line.
+    assert "inherits" not in vrs_processor.raw_defs["Range"]
+    no_parent_rst = render("Range")
+    assert "**Inherits:**" not in no_parent_rst
+
+
 def test_used_in_omits_transitive_subclass_enumeration_mirror(vrs_processor):
     """Sealed Variation's auto-derived oneOf directly $refs Allele (a
     grandchild, reached transitively through the abstract MolecularVariation)
