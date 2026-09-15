@@ -14,6 +14,8 @@ attributes win) and may no longer rename inherited properties.
 import json
 import os
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -258,6 +260,94 @@ def test_cross_references_span_whole_folder_not_just_rendering_source():
     assert "AmpAscoCapEvidenceLine" in coding_rst  # aac-2017's own reference
     assert "VariantPathogenicityStatement" in coding_rst  # acmg-2015, a sibling
     assert "VariantOncogenicityStatement" in coding_rst  # ccv-2022, a sibling
+
+
+def _copy_va_spec_data_tree(tmp_path):
+    """Copy the whole ``tests/data/`` tree -- not just va-spec -- into an
+    isolated ``tmp_path``, preserving the relative sibling layout va-spec's
+    imports depend on (``../gkm-core/...``, ``../vrs/...``,
+    ``../catvrs/...``). Build artifacts are excluded so each test starts
+    from a clean slate. Returns the copied ``va-spec`` directory.
+    """
+    dest = tmp_path / "data"
+    shutil.copytree(root / "data", dest, ignore=shutil.ignore_patterns("build", "json", "def"))
+    return dest / "va-spec"
+
+
+def _run_make(cwd):
+    """Run ``make`` in ``cwd`` with this venv's console scripts (source2classes,
+    source2splitjs, y2t) on PATH, matching how the real Makefile invokes them.
+    """
+    env = os.environ.copy()
+    env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
+    result = subprocess.run(["make"], cwd=cwd, env=env, capture_output=True, text=True)
+    assert result.returncode == 0, f"make failed in {cwd}:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+
+
+def _throwaway_class_yaml(name):
+    return (
+        f"\n  {name}:\n"
+        "    maturity: draft\n"
+        "    description: throwaway class for a prune.mk regression test\n"
+        "    type: object\n"
+        "    properties:\n"
+        "      note:\n"
+        "        type: string\n"
+    )
+
+
+@pytest.mark.skipif(shutil.which("make") is None, reason="make is not available")
+def test_prune_removes_stale_profile_class_output(tmp_path):
+    """prune.mk must remove a class's stale json/XXX + def/XXX output once
+    that class is removed from its own profile source. Runs the REAL
+    va-spec Makefile/prune.mk (copied into an isolated tmp_path so it can
+    safely mutate a source and rebuild without touching the committed
+    fixtures).
+    """
+    va_spec = _copy_va_spec_data_tree(tmp_path)
+    aac = va_spec / "aac-2017-profile-source.yaml"
+    original = aac.read_text()
+
+    aac.write_text(original + _throwaway_class_yaml("ZzzThrowawayTestClass"))
+    _run_make(va_spec)
+    json_out = va_spec / "json/aac-2017/ZzzThrowawayTestClass"
+    def_out = va_spec / "def/aac-2017/ZzzThrowawayTestClass.rst"
+    assert json_out.exists()
+    assert def_out.exists()
+
+    # remove the class and rebuild -- prune.mk must clean up its stale output
+    aac.write_text(original)
+    _run_make(va_spec)
+    assert not json_out.exists()
+    assert not def_out.exists()
+    # the profile's real classes survived the rebuild + prune
+    assert (va_spec / "json/aac-2017/AmpAscoCapEvidenceLine").exists()
+    assert (va_spec / "def/aac-2017/AmpAscoCapEvidenceLine.rst").exists()
+
+
+@pytest.mark.skipif(shutil.which("make") is None, reason="make is not available")
+def test_prune_leaves_stale_top_level_def_alone(tmp_path):
+    """The shared top-level def/ is intentionally NOT pruned when a class is
+    removed from a base source -- it's a regenerated closure, cleared only
+    by ``make clean`` (see METASCHEMA_BEHAVIOR.md's prune.mk rationale).
+    json/ for the same removed class IS pruned, same as any other class
+    removal.
+    """
+    va_spec = _copy_va_spec_data_tree(tmp_path)
+    domain_entities = va_spec / "domain-entities-source.yaml"
+    original = domain_entities.read_text()
+
+    domain_entities.write_text(original + _throwaway_class_yaml("ZzzThrowawayBaseClass"))
+    _run_make(va_spec)
+    json_out = va_spec / "json/ZzzThrowawayBaseClass"
+    def_out = va_spec / "def/ZzzThrowawayBaseClass.rst"
+    assert json_out.exists()
+    assert def_out.exists()
+
+    domain_entities.write_text(original)
+    _run_make(va_spec)
+    assert not json_out.exists()  # json/ is pruned
+    assert def_out.exists()  # def/ is intentionally left stale
 
 
 @pytest.mark.parametrize("src", VA_PROFILES, ids=lambda p: p.name.replace("-profile-source.yaml", ""))
