@@ -213,6 +213,53 @@ def test_va_spec_profile_outputs_generated(src):
     assert proc.def_fp.is_dir() and any(proc.def_fp.iterdir())
 
 
+def test_profile_def_contains_only_own_classes():
+    """A profile's def/XXX holds exactly its own classes -- the same set as
+    json/XXX -- not the classes it reaches via import. Those land in the
+    shared top-level def/ instead (see y2t.main's own_def_fp/top_def_fp
+    split). A regression back to full-closure-per-profile (every class y2t
+    can see duplicated into every profile's own subfolder) would pass
+    test_va_spec_profile_outputs_generated (it only checks non-empty) but
+    fail this.
+    """
+    proc = YamlSchemaProcessor(root / "data/va-spec/aac-2017-profile-source.yaml")
+    _generate_outputs(proc)
+    own_json_classes = {p.name for p in proc.json_fp.iterdir()}
+    own_def_classes = {p.stem for p in proc.def_fp.glob("*.rst")}
+    assert own_def_classes == own_json_classes
+
+    # classes reached only via import (owned by va-core/gkm-core, not
+    # aac-2017) must NOT be duplicated into aac-2017's own subfolder...
+    assert "EvidenceLine" not in own_def_classes
+    assert "Coding" not in own_def_classes
+    # ...they land in the shared top-level def/ instead.
+    top_def_fp = proc.def_fp.parent
+    assert (top_def_fp / "EvidenceLine.rst").exists()
+    assert (top_def_fp / "Coding.rst").exists()
+
+
+def test_cross_references_span_whole_folder_not_just_rendering_source():
+    """Used in:/Subclasses: on a shared top-level def/ file (e.g. gkm-core's
+    Coding, pulled in by every va-spec profile) must reflect every profile
+    that references it, not just whichever profile's y2t run wrote the file
+    -- otherwise the list silently depends on build order (see
+    METASCHEMA_BEHAVIOR.md History). Generating *only* aac-2017 here must
+    still surface acmg-2015's and ccv-2022's own references to Coding, which
+    proves the cross-reference computation spans the whole folder
+    (y2t._folder_xref_processors), not just aac-2017's own closure
+    (y2t._folder_processors). This holds regardless of what any other test
+    already wrote to this shared file: render_class overwrites the file (not
+    appends), so its content after this call is entirely attributable to
+    this call's own computation.
+    """
+    aac = YamlSchemaProcessor(root / "data/va-spec/aac-2017-profile-source.yaml")
+    _generate_outputs(aac)
+    coding_rst = (aac.def_fp.parent / "Coding.rst").read_text()
+    assert "AmpAscoCapEvidenceLine" in coding_rst  # aac-2017's own reference
+    assert "VariantPathogenicityStatement" in coding_rst  # acmg-2015, a sibling
+    assert "VariantOncogenicityStatement" in coding_rst  # ccv-2022, a sibling
+
+
 @pytest.mark.parametrize("src", VA_PROFILES, ids=lambda p: p.name.replace("-profile-source.yaml", ""))
 def test_profile_sub_namespace_routing(src):
     """A ``XXX-profile-source.yaml`` routes its outputs and class $ids through the
