@@ -29,7 +29,10 @@ maturity_levels = {"deprecated": 0, "draft": 1, "trial use": 2, "normative": 3}
 
 class YamlSchemaProcessor:
     def __init__(self, schema_fp, root_fp=None):
-        self.schema_fp = Path(schema_fp)
+        # Resolved so schema_fp is canonical everywhere it's compared (e.g. a
+        # diamond import reaching the same file via two different relative
+        # routes must compare equal -- see _register_merge_import).
+        self.schema_fp = Path(schema_fp).resolve()
         self.imported = root_fp is not None
         self.root_schema_fp = root_fp
         self.raw_schema = self.load_schema(schema_fp)
@@ -165,15 +168,18 @@ class YamlSchemaProcessor:
             assert len(defined_classes & other.processed_classes) == 0
             defined_classes.update(other.processed_classes)
 
+        # Every curie prefix declared anywhere in the merged content -- by
+        # this source itself, or by any transitively-imported source -- must
+        # now resolve locally, since everything lives in one flat document
+        # after the merge. Curie prefixes (e.g. "gkm.core") are a distinct
+        # namespace from import dependency names (e.g. "gkm-core"), so this
+        # is keyed by ``namespaces:`` keys, not ``import_process_order``.
+        for ns in self.raw_schema.get("namespaces", {}):
+            self.namespaces[ns] = f"#/{self.schema_def_keyword}/"
         for key in self.import_process_order:
-            self.namespaces[key] = f"#/{self.schema_def_keyword}/"
             other = self.import_processors[key]
-            other_ns = other.raw_schema.get("namespaces", [])
-            if other_ns:
-                for ns in other_ns:
-                    if ns not in self.import_process_order:
-                        # Handle external refs that do not match imports
-                        self.namespaces[key] = other.namespaces[key]
+            for ns in other.raw_schema.get("namespaces", {}):
+                self.namespaces[ns] = f"#/{self.schema_def_keyword}/"
             self.raw_defs.update(other.raw_defs)
 
         # revise all class.inherits attributes from CURIE to local defs
@@ -214,12 +220,27 @@ class YamlSchemaProcessor:
             return obj
         return obj
 
-    def _register_merge_import(self, proc):
+    def _register_merge_import(self, proc, seen=None):
+        # ``seen`` memoizes which imported files have already had their own
+        # import subtree walked, keyed by resolved schema_fp. A diamond (e.g.
+        # cat-vrs importing both gkm-core directly and vrs, which itself
+        # imports gkm-core) would otherwise re-descend into the same file's
+        # imports once per distinct path that reaches it -- redundant, and
+        # exponential on deeper graphs.
+        if seen is None:
+            seen = set()
         for name, other in proc.imports.items():
-            self._register_merge_import(other)
+            if other.schema_fp not in seen:
+                seen.add(other.schema_fp)
+                self._register_merge_import(other, seen)
             if name in self.import_locations:
                 # check that all imports from imported point to same locations
-                assert self.import_locations[name] == other.schema_fp
+                if self.import_locations[name] != other.schema_fp:
+                    raise ValueError(
+                        f"Import name {name!r} resolves to two different files: "
+                        f"{self.import_locations[name]} and {other.schema_fp}. Fix: use the same import "
+                        f"path for {name!r} everywhere it's imported."
+                    )
             else:
                 self.import_locations[name] = other.schema_fp
                 self.import_processors[name] = other
@@ -238,6 +259,10 @@ class YamlSchemaProcessor:
             if not fp.is_absolute():
                 base_path = self.schema_fp.parent
                 fp = base_path.joinpath(fp)
+            # Resolve so the same underlying file reached via two different
+            # relative routes (e.g. a diamond import) compares equal by path
+            # rather than by the literal (unnormalized) string used to reach it.
+            fp = fp.resolve()
             if self.imported:
                 root_fp = self.root_schema_fp
             else:
@@ -351,11 +376,20 @@ class YamlSchemaProcessor:
                     new_k = k[:-5]
                     processed_node[new_k] = self.resolve_curie(v)
                     del processed_node[k]
-                elif k == "$ref" and v.startswith("#/") and self.imported:
-                    # TODO: fix below hard-coded name convention, yuck.
-                    rel_root = self.schema_fp.parent.relative_to(self.root_schema_fp.parent, walk_up=True)
-                    schema_stem = self.schema_fp.stem.split("-")[0]
-                    processed_node[k] = str(rel_root / f"{schema_stem}.json{v}")
+                elif k == "$ref":
+                    if not v.startswith("#/"):
+                        raise ValueError(
+                            f"Ambiguous $ref {v!r} in '{self.schema_fp.name}'. A '$ref' value must be a local "
+                            f"reference starting with '#/{self.schema_def_keyword}/' (e.g. "
+                            f"'#/{self.schema_def_keyword}/{v.rsplit('/', 1)[-1].split('.')[0] or 'MyClass'}'). "
+                            "Fix: for a reference to a class in another schema, use "
+                            "'$refCurie: <namespace>:<Class>' instead."
+                        )
+                    if self.imported:
+                        # TODO: fix below hard-coded name convention, yuck.
+                        rel_root = self.schema_fp.parent.relative_to(self.root_schema_fp.parent, walk_up=True)
+                        schema_stem = self.schema_fp.stem.split("-")[0]
+                        processed_node[k] = str(rel_root / f"{schema_stem}.json{v}")
                 else:
                     self.process_property_tree_refs(raw_node[k], processed_node[k])
         elif isinstance(raw_node, list):

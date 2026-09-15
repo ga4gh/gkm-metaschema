@@ -1,5 +1,7 @@
 import io
+import json
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -43,6 +45,28 @@ def test_merged_create():
     p = YamlSchemaProcessor(root / "data/vrs/vrs-source.yaml")
     p.merge_imported()
     assert True
+
+
+def test_merged_create_diamond_import():
+    """``recipes-source.yaml`` imports cat-vrs (which imports gkm-core + vrs)
+    *and* gkm-core/vrs directly -- gkm-core is reached via two different
+    routes (a diamond). ``merge_imported()`` must flatten this without
+    raising, with no unresolved curie leaking and every $ref made local.
+    """
+    p = YamlSchemaProcessor(root / "data/catvrs/recipes-source.yaml")
+    p.merge_imported()
+
+    # gkm-core, reached via two different import paths, is merged exactly
+    # once (a dict key can't duplicate; this just confirms it made it in).
+    assert "Coding" in p.for_js["$defs"]
+    # every class from the whole transitive closure is present
+    for cls in ("CategoricalVariant", "DefiningAlleleConstraint", "Allele", "GeneFusion"):
+        assert cls in p.for_js["$defs"]
+
+    doc = json.dumps(p.for_js)
+    assert "Curie" not in doc, "an unresolved *Curie key leaked into the merged document"
+    for match in re.finditer(r'"\$ref":\s*"([^"]+)"', doc):
+        assert match.group(1).startswith("#/"), f"non-local $ref survived the merge: {match.group(1)}"
 
 
 def test_class_create():

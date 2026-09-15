@@ -117,6 +117,13 @@ collapsed into a `oneOf` of their descendants.
 
 ## 6. References
 
+- **`$ref` must be local** — a `#/$defs/<Class>` (or `#/definitions/<Class>`)
+  fragment. Any other form (a bare class name like `$ref: CategoricalVariant`,
+  or an external path/URL) raises a `ValueError` naming the offending value and
+  the file it's in, with a fix hint to use `$refCurie` instead. A cross-schema
+  reference always goes through `$refCurie`, so it resolves the same way in
+  every artifact (split `json/`, RST `def/`, and the merged document) rather
+  than depending on a per-artifact fallback (see [History](#history)).
 - `$refCurie` values are resolved against the schema's `namespaces` map into
   `$ref`s. Resolution walks the **entire** class definition — top-level
   `properties`, any class-level `allOf`/`anyOf`/`oneOf` composition, and
@@ -263,34 +270,20 @@ from the source's own location / `$id` (e.g. `va-core-source.yaml` at
 
 ## Known limitations
 
-- **Bare local `$ref`s in `recipes-source.yaml`.** The cat-vrs recipe classes
-  compose with `allOf: [ {$ref: CategoricalVariant}, … ]` using **bare** local
-  references (`$ref: CategoricalVariant`, `$ref: DefiningAlleleConstraint`, …)
-  rather than `#/$defs/CategoricalVariant`. In the split per-class `json/`
-  artifacts these are rewritten to resolvable file paths (e.g.
-  `/ga4gh/schema/cat-vrs/1.x/json/CategoricalVariant`), but in the in-place
-  merged document (`for_js`) they remain bare and would not resolve in a
-  standalone validator. (The cross-schema `$refCurie` references that used to
-  leak unresolved are now resolved — see [§6](#6-references).) End-to-end
-  instance validation additionally depends on the referenced per-class files
-  being served at their `$id` paths. The `allOf` closure *mechanism* is proven
-  behaviorally against a processor-generated synthetic class, and the real
-  recipe classes are proven structurally to meet both closure preconditions
-  (see [Testing](#testing)).
-- **`merge_imported()` fails on the recipes import graph.** Recipes import
-  cat-vrs (which imports vrs + gkm-core) *and* vrs/gkm-core directly; the merge
-  step asserts a single location per import name and raises on this diamond.
 - **No source-attribute validation.** The processor is a transform, not a
   validator: unknown/legacy class-level keys (e.g. a leftover
   `heritableProperties`, or a `namespaces` mapping missing its `#/$defs/`
   fragment) pass through without a dedicated error and only surface downstream.
-  Targeted guards exist for specific removed patterns (`extends`, the covariance
-  rule, maturity ordering).
-- **Test scope.** Automated tests currently cover `gkm-core`, `vrs`,
-  `cat-vrs`, `recipes`, and the `va-spec` schemas (`base/domain-entities`,
-  `base/va-core`, and the `aac-2017` / `acmg-2015` / `ccv-2022` profiles).
-  Other GKS source YAMLs are excluded while the set is mid-migration; a few
-  legacy tests are skipped for removed fixtures.
+  Targeted guards exist for specific removed/disallowed patterns (`extends`,
+  the covariance rule, maturity ordering, non-local `$ref` — see
+  [§6](#6-references)), but there's no holistic "shape of the source file"
+  validation pass; adding one would need to enumerate the checks and decide how
+  strict to be, not just patch one more case.
+- **Test scope.** Automated tests currently cover `gkm-core`, `vrs`, `cat-vrs`,
+  `recipes`, and the `va-spec` schemas (`domain-entities`, `va-core`, and the
+  `aac-2017` / `acmg-2015` / `ccv-2022` profiles). Other GKS source YAMLs are
+  excluded while the set is mid-migration; a few legacy tests are skipped for
+  removed fixtures.
 
 ## Testing
 
@@ -330,3 +323,23 @@ Behaviors intentionally **removed / changed** during the migration:
   definition (see [§6](#6-references)).
 - Empty `properties: {}` / `required: []` are now **omitted** rather than
   always emitted (see [§1](#1-class-model)).
+- A bare or external `$ref` (anything but `#/$defs/<Class>`) is now
+  **rejected** with a `ValueError`, rather than silently resolved by searching
+  every import for a class with a matching tail-segment name. That fallback
+  worked by coincidence (it happened to find the right class by name) rather
+  than by declared intent, and could mask a genuinely wrong reference —
+  `ccv-2022-profile-source.yaml` had two `$ref`s hardcoding a stale
+  version/path segment that the fallback silently papered over. Fix: use
+  `$refCurie: <namespace>:<Class>` (see [§6](#6-references)).
+- `import_dependencies`/`merge_imported()` now **resolve** import paths
+  (`Path.resolve()`) before storing/comparing them. Previously, the same
+  imported file reached via two different relative routes (a diamond, e.g.
+  `recipes` → `cat-vrs` → `gkm-core` *and* `recipes` → `vrs` → `gkm-core`)
+  compared as two different files and `merge_imported()` raised. Diamond
+  imports are common and expected, not an error. `_register_merge_import` also
+  now memoizes by resolved path so a diamond doesn't re-walk the same file's
+  import subtree once per route that reaches it. Separately, the
+  post-merge curie-namespace remapping (which points every curie prefix used
+  anywhere in the merged content at the now-local `#/$defs/`) was keyed by the
+  wrong dictionary (import dependency names instead of curie prefixes) and
+  has been corrected.
