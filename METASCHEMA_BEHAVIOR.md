@@ -139,8 +139,14 @@ collapsed into a `oneOf` of their descendants.
   rather than at resolve time.
 - A `$ref` that targets an **abstract class stays a direct `$ref`** — it is
   *not* expanded into a `oneOf` of concrete descendants.
-- Metaschema-only keywords (`inherits`, `abstract`, `protectedClassOf`,
-  `header_level`) are stripped from the emitted JSON Schema.
+- Metaschema-only keywords (`inherits`, `protectedClassOf`, `header_level`)
+  are stripped from the emitted JSON Schema. **`abstract` is the exception:**
+  it survives as `abstract: true` on classes that are actually abstract, so a
+  consumer of the per-class JSON can tell abstract and concrete classes apart
+  without cross-referencing the source YAML. Concrete classes omit the key
+  entirely rather than carrying `abstract: false`. It is not a standard JSON
+  Schema keyword, but unknown keywords are ignored by validators, not
+  rejected, so this doesn't affect validation.
 - **`$comment` is stripped everywhere.** It is treated as an internal,
   source-only annotation: it stays in the `*-source.yaml` but is removed
   recursively from the emitted JSON Schema wherever it appears (class level,
@@ -346,3 +352,10 @@ Behaviors intentionally **removed / changed** during the migration:
   anywhere in the merged content at the now-local `#/$defs/`) was keyed by the
   wrong dictionary (import dependency names instead of curie prefixes) and
   has been corrected.
+- `abstract` is now **preserved** (as `abstract: true`) in the emitted JSON
+  Schema for classes that are actually abstract, rather than being stripped
+  unconditionally like the other metaschema-only keywords (see
+  [§6](#6-references)). Nothing internal to the processor depended on the
+  stripped behavior — `class_is_abstract()` and everything built on it read
+  the flag from the raw source schema, not from `for_js` — so this only
+  changes what a consumer of the per-class JSON can observe.

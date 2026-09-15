@@ -701,7 +701,13 @@ class YamlSchemaProcessor:
             # Strip metaschema-only keywords that are not valid JSON Schema.
             schema_definition.pop("inherits", None)
             schema_definition.pop("protectedClassOf", None)
-            schema_definition.pop("abstract", None)
+            # `abstract` is preserved (as `true`) only on classes that are
+            # actually abstract, so a consumer of the per-class JSON can tell
+            # abstract and concrete classes apart without cross-referencing
+            # the source YAML. It's not a standard JSON Schema keyword, but
+            # unknown keywords are ignored by validators, not rejected.
+            if not schema_definition.get("abstract", False):
+                schema_definition.pop("abstract", None)
             schema_definition.pop("header_level", None)
             if "description" in schema_definition:
                 schema_definition["description"] = self._scrub_rst_markup(schema_definition["description"])
