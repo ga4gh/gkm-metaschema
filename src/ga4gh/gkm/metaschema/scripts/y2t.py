@@ -332,10 +332,39 @@ def render_information_model(f, properties: dict, required: list, note: str = ""
 
 
 def _folder_processors(proc: YamlSchemaProcessor) -> list:
-    """All source processors in the same folder as ``proc`` (including it).
+    """All source processors in the same folder as ``proc`` (including it),
+    scoped to what ``proc`` itself renders.
 
-    A folder's docs cover every ``*-source.yaml`` beside it (e.g. cat-vrs +
-    recipes), so cross-references are computed over the whole folder.
+    A non-profile folder's docs cover every non-profile ``*-source.yaml``
+    beside it (e.g. cat-vrs + recipes). A profile source is scoped to just
+    itself: it renders its own classes into its own ``def/XXX``, plus the rest
+    of its closure into the shared top-level ``def/`` (see ``main``) -- it
+    never renders a sibling profile's own classes.
+    """
+    if getattr(proc, "sub_namespace", None):
+        return [proc]
+    procs = {proc.schema_fp.resolve(): proc}
+    for src in sorted(proc.schema_fp.parent.glob("*-source.yaml")):
+        if src.name.endswith(YamlSchemaProcessor._PROFILE_SUFFIX):
+            continue
+        key = src.resolve()
+        if key not in procs:
+            procs[key] = YamlSchemaProcessor(src)
+    return list(procs.values())
+
+
+def _folder_xref_processors(proc: YamlSchemaProcessor) -> list:
+    """Every ``*-source.yaml`` in ``proc``'s folder -- base sources AND every
+    profile alike -- for computing complete Used in:/Subclasses: cross
+    references.
+
+    Unlike ``_folder_processors`` (which scopes *rendering* to what a given
+    source's ``y2t`` invocation should write), cross-references must span the
+    whole folder regardless of who's rendering: a shared top-level ``def/``
+    file (e.g. an imported class several profiles narrow) needs every
+    referencing class counted, not just the current invocation's own closure
+    -- otherwise whichever source's ``y2t`` run writes the file last silently
+    drops the other sources' references.
     """
     procs = {proc.schema_fp.resolve(): proc}
     for src in sorted(proc.schema_fp.parent.glob("*-source.yaml")):
@@ -494,28 +523,41 @@ def render_class(
 
 
 def main(proc_schema: YamlSchemaProcessor) -> None:
-    """Generate .rst for every class in the folder's import closure.
+    """Generate .rst for ``proc_schema``'s transitive import closure, splitting
+    where each class lands: ``proc_schema``'s own classes (mirroring ``json/``)
+    go into ``proc_schema.def_fp``; every other class reached through the
+    closure (all ``*-source.yaml`` beside ``proc_schema`` plus their imports,
+    recursively) is rendered into the shared top-level ``def/`` -- ``def_fp``'s
+    parent for a profile source, or ``def_fp`` itself for a non-profile one.
 
-    All ``*-source.yaml`` beside ``proc_schema``, plus their imports (recursively
-    across levels), are rendered into ``proc_schema.def_fp`` so the folder is
-    self-contained and its 'Used in:' / 'Subclasses:' lists are accurate from
-    that folder's perspective.
+    Multiple sources in a folder can pull the same imported class into their
+    closure; each render is identical regardless of which source triggers it,
+    so writing them all into the same shared top-level dir is a no-op union,
+    not a conflict. Used in:/Subclasses: labels are computed over the whole
+    folder (see ``_folder_xref_processors``), not just this invocation's own
+    closure, so they stay complete and build-order-independent even on shared
+    files multiple sources render into.
     """
-    processors = _folder_processors(proc_schema)
-    owners = _closure_owners(processors)
-    used_in, subclasses = build_cross_references(owners)
-    def_fp = proc_schema.def_fp
-    os.makedirs(def_fp, exist_ok=True)
+    owners = _closure_owners(_folder_processors(proc_schema))
+    xref_owners = _closure_owners(_folder_xref_processors(proc_schema))
+    used_in, subclasses = build_cross_references(xref_owners)
+    own_def_fp = proc_schema.def_fp
+    top_def_fp = own_def_fp.parent if proc_schema.sub_namespace else own_def_fp
+    os.makedirs(own_def_fp, exist_ok=True)
+    os.makedirs(top_def_fp, exist_ok=True)
+    own_defs = proc_schema.processed_schema.get(proc_schema.schema_def_keyword, {})
     for class_name, owner in owners.items():
         class_definition = owner.processed_schema[owner.schema_def_keyword][class_name]
-        render_class(owner, class_name, class_definition, def_fp, used_in, subclasses)
+        target_fp = own_def_fp if class_name in own_defs else top_def_fp
+        render_class(owner, class_name, class_definition, target_fp, used_in, subclasses)
 
     # Normalize generated RST: strip trailing whitespace on every line and end
     # each file with a single newline, so output matches what pre-commit produces
     # and re-running the generator never dirties the working tree.
-    for rst_file in def_fp.glob("*.rst"):
-        text = rst_file.read_text()
-        rst_file.write_text("\n".join(line.rstrip() for line in text.splitlines()).rstrip("\n") + "\n")
+    for fp in {own_def_fp, top_def_fp}:
+        for rst_file in fp.glob("*.rst"):
+            text = rst_file.read_text()
+            rst_file.write_text("\n".join(line.rstrip() for line in text.splitlines()).rstrip("\n") + "\n")
 
 
 def cli():

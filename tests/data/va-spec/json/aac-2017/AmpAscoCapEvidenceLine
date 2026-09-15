@@ -1,0 +1,60 @@
+{
+   "$schema": "https://json-schema.org/draft/2020-12/schema",
+   "$id": "https://w3id.org/ga4gh/schema/va-spec/1.0.0-msp.test/json/aac-2017/AmpAscoCapEvidenceLine",
+   "title": "AmpAscoCapEvidenceLine",
+   "description": "Evidence line for AMP/ASCO/CAP",
+   "maturity": "draft",
+   "allOf": [
+      {
+         "$ref": "/ga4gh/schema/va-spec/1.0.0-msp.test/json/EvidenceLine"
+      },
+      {
+         "properties": {
+            "targetProposition": {
+               "oneOf": [
+                  {
+                     "$ref": "/ga4gh/schema/va-spec/1.0.0-msp.test/json/VariantPrognosticProposition"
+                  },
+                  {
+                     "$ref": "/ga4gh/schema/va-spec/1.0.0-msp.test/json/VariantDiagnosticProposition"
+                  },
+                  {
+                     "$ref": "/ga4gh/schema/va-spec/1.0.0-msp.test/json/VariantTherapeuticResponseProposition"
+                  }
+               ]
+            },
+            "strengthOfEvidenceProvided": {
+               "properties": {
+                  "primaryCoding": {
+                     "allOf": [
+                        {
+                           "$ref": "/ga4gh/schema/gkm-core/1.0.0-msp.test/json/Coding"
+                        },
+                        {
+                           "properties": {
+                              "code": {
+                                 "enum": [
+                                    "A",
+                                    "B",
+                                    "C",
+                                    "D"
+                                 ]
+                              },
+                              "system": {
+                                 "const": "AMP/ASCO/CAP Guidelines, 2017"
+                              }
+                           }
+                        }
+                     ]
+                  }
+               }
+            }
+         }
+      }
+   ],
+   "required": [
+      "targetProposition"
+   ],
+   "type": "object",
+   "unevaluatedProperties": false
+}

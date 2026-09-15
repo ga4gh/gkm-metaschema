@@ -117,6 +117,13 @@ collapsed into a `oneOf` of their descendants.
 
 ## 6. References
 
+- **`$ref` must be local** — a `#/$defs/<Class>` (or `#/definitions/<Class>`)
+  fragment. Any other form (a bare class name like `$ref: CategoricalVariant`,
+  or an external path/URL) raises a `ValueError` naming the offending value and
+  the file it's in, with a fix hint to use `$refCurie` instead. A cross-schema
+  reference always goes through `$refCurie`, so it resolves the same way in
+  every artifact (split `json/`, RST `def/`, and the merged document) rather
+  than depending on a per-artifact fallback (see [History](#history)).
 - `$refCurie` values are resolved against the schema's `namespaces` map into
   `$ref`s. Resolution walks the **entire** class definition — top-level
   `properties`, any class-level `allOf`/`anyOf`/`oneOf` composition, and
@@ -202,47 +209,84 @@ Why the distinction matters:
     **concrete** GA4GH-identifiable classes only. Abstract classes omit it even
     when they carry/inherit a `ga4gh` block, since they are never instantiated —
     the digest applies to the concrete subclasses that inherit it.
-  - `y2t` is a **folder-level** build: it renders every class in a folder's
-    import closure (all `*-source.yaml` beside it plus their imports,
-    recursively) into that folder's `def/`, so the folder is self-contained and
-    its cross-reference lists are accurate *from that folder's perspective*.
+  - `y2t` renders a source's **full transitive import closure** (all
+    `*-source.yaml` beside it plus their imports, recursively — see
+    [`_folder_processors`](src/ga4gh/gkm/metaschema/scripts/y2t.py)), but splits
+    *where* each class lands: a source's **own** classes go into its own
+    `def/` (mirroring how `source2splitjs` only emits a source's own classes
+    into `json/`); every other class reached through the closure is rendered
+    into the shared **top-level** `def/` (a profile's `def/XXX`'s parent, or
+    `def/` itself for a non-profile source). Several sources in a folder can
+    pull the same imported class into their closure — each render is
+    identical regardless of which source triggers it, so this is a
+    deduplicated union, not per-source duplication. A **profile source is the
+    exception** for *rendering* scope — it never renders a sibling profile's
+    own classes (see [§9](#9-profile-sub-namespaces)).
+  - **Used in:**/**Subclasses:** cross-reference lists are computed over
+    **every** `*-source.yaml` in the folder — base sources *and* every
+    profile alike (see
+    [`_folder_xref_processors`](src/ga4gh/gkm/metaschema/scripts/y2t.py)) —
+    not just the closure of whichever source is currently rendering. This
+    matters for shared top-level `def/` files: several sources can each pull
+    in the same imported class and narrow/reference it differently, and
+    computing cross-references only from the current invocation's own closure
+    would make the file's xref list depend on which source's `y2t` run
+    happened to write it last. Computing them folder-wide instead makes every
+    render of a given class identical regardless of write order.
 
 Imports are only pulled in as dependencies; a schema's own `json/` artifacts are
 produced only when the scripts are run **on that schema's processor** (see the
 tests for examples).
 
+## 9. Profile sub-namespaces
+
+A source file named **`XXX-profile-source.yaml`** contributes `XXX` as a
+**sub-namespace**. This lets several profiles live side-by-side in one folder
+(e.g. all of `va-spec/`) while each keeps a distinct output location and `$id`
+space:
+
+- **Outputs** go to `<parent>/json/XXX` and `<parent>/def/XXX` — nested inside
+  the folder's shared `json`/`def` dirs, not as sibling top-level folders. A
+  folder's only direct children are ever `json/` and `def/`.
+- **Every class `$id`** is `.../<version>/json/XXX/<Class>` — the `XXX` segment
+  is injected after `json`.
+- **Validation:** the `XXX` taken from the filename must equal the `XXX` in the
+  file's own `$id` (its final path segment, `.../<version>/XXX-profile-source.yaml`).
+  A mismatch raises a `ValueError` (with a fix hint) during processing.
+- **Docs:** a profile is a standalone unit for *rendering* — `y2t` renders that
+  profile's own classes into `def/XXX`, and every other class in its own
+  import closure into the shared top-level `def/`, so sibling profiles in the
+  same folder never end up with each other's classes in their `def/XXX`.
+  **Used in:**/**Subclasses:** cross-references, however, are computed across
+  every source in the folder (base sources and every profile together — see
+  [§8](#8-outputs)), so they stay complete on shared top-level `def/` files
+  that more than one profile references.
+
+Non-profile sources are unaffected: their outputs and `$id`s continue to derive
+from the source's own location / `$id` (e.g. `va-core-source.yaml` at
+`va-spec/` emits to `va-spec/json` with `$id` `.../<version>/json/<Class>`).
+
 ---
 
 ## Known limitations
 
-- **Bare local `$ref`s in `recipes-source.yaml`.** The cat-vrs recipe classes
-  compose with `allOf: [ {$ref: CategoricalVariant}, … ]` using **bare** local
-  references (`$ref: CategoricalVariant`, `$ref: DefiningAlleleConstraint`, …)
-  rather than `#/$defs/CategoricalVariant`. In the split per-class `json/`
-  artifacts these are rewritten to resolvable file paths (e.g.
-  `/ga4gh/schema/cat-vrs/1.x/json/CategoricalVariant`), but in the in-place
-  merged document (`for_js`) they remain bare and would not resolve in a
-  standalone validator. (The cross-schema `$refCurie` references that used to
-  leak unresolved are now resolved — see [§6](#6-references).) End-to-end
-  instance validation additionally depends on the referenced per-class files
-  being served at their `$id` paths. The `allOf` closure *mechanism* is proven
-  behaviorally against a processor-generated synthetic class, and the real
-  recipe classes are proven structurally to meet both closure preconditions
-  (see [Testing](#testing)).
-- **`merge_imported()` fails on the recipes import graph.** Recipes import
-  cat-vrs (which imports vrs + gkm-core) *and* vrs/gkm-core directly; the merge
-  step asserts a single location per import name and raises on this diamond.
 - **No source-attribute validation.** The processor is a transform, not a
   validator: unknown/legacy class-level keys (e.g. a leftover
   `heritableProperties`, or a `namespaces` mapping missing its `#/$defs/`
   fragment) pass through without a dedicated error and only surface downstream.
-  Targeted guards exist for specific removed patterns (`extends`, the covariance
-  rule, maturity ordering).
-- **Test scope.** Automated tests currently cover `gkm-core`, `vrs`,
-  `cat-vrs`, `recipes`, and the `va-spec` schemas (`base/domain-entities`,
-  `base/va-core`, and the `aac-2017` / `acmg-2015` / `ccv-2022` profiles).
-  Other GKS source YAMLs are excluded while the set is mid-migration; a few
-  legacy tests are skipped for removed fixtures.
+  Targeted guards exist for specific removed/disallowed patterns (`extends`,
+  the covariance rule, maturity ordering, non-local `$ref` — see
+  [§6](#6-references)), but there's no holistic "shape of the source file"
+  validation pass; adding one would need to enumerate the checks and decide how
+  strict to be, not just patch one more case.
+- **Test scope.** Automated tests cover every `*-source.yaml` currently in
+  this repo (`gkm-core`, `vrs`, `cat-vrs`, `recipes`, and the `va-spec`
+  schemas: `domain-entities`, `va-core`, and the `aac-2017` / `acmg-2015` /
+  `ccv-2022` profiles) — there are no excluded or skipped fixtures. These are
+  representative test fixtures for exercising the processor, though, not
+  necessarily the full, real schemas maintained in the corresponding GKS
+  product repos (va-spec, cat-vrs, etc.), which may be larger or drift as
+  those repos evolve independently of this one.
 
 ## Testing
 
@@ -282,3 +326,23 @@ Behaviors intentionally **removed / changed** during the migration:
   definition (see [§6](#6-references)).
 - Empty `properties: {}` / `required: []` are now **omitted** rather than
   always emitted (see [§1](#1-class-model)).
+- A bare or external `$ref` (anything but `#/$defs/<Class>`) is now
+  **rejected** with a `ValueError`, rather than silently resolved by searching
+  every import for a class with a matching tail-segment name. That fallback
+  worked by coincidence (it happened to find the right class by name) rather
+  than by declared intent, and could mask a genuinely wrong reference —
+  `ccv-2022-profile-source.yaml` had two `$ref`s hardcoding a stale
+  version/path segment that the fallback silently papered over. Fix: use
+  `$refCurie: <namespace>:<Class>` (see [§6](#6-references)).
+- `import_dependencies`/`merge_imported()` now **resolve** import paths
+  (`Path.resolve()`) before storing/comparing them. Previously, the same
+  imported file reached via two different relative routes (a diamond, e.g.
+  `recipes` → `cat-vrs` → `gkm-core` *and* `recipes` → `vrs` → `gkm-core`)
+  compared as two different files and `merge_imported()` raised. Diamond
+  imports are common and expected, not an error. `_register_merge_import` also
+  now memoizes by resolved path so a diamond doesn't re-walk the same file's
+  import subtree once per route that reaches it. Separately, the
+  post-merge curie-namespace remapping (which points every curie prefix used
+  anywhere in the merged content at the now-local `#/$defs/`) was keyed by the
+  wrong dictionary (import dependency names instead of curie prefixes) and
+  has been corrected.

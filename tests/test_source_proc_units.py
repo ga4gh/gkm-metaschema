@@ -241,3 +241,45 @@ def test_narrowing_or_annotating_inherited_property_is_allowed(tmp_path, parent_
     proc = _build_parent_child(tmp_path, parent_type_prop, child_type_prop)
     # the child's type property built successfully and carries the merged result
     assert "type" in proc.for_js["$defs"]["Child"]["properties"]
+
+
+# --------------------------------------------------------------------------
+# $ref must be a local reference ("#/$defs/..."); anything else (a bare
+# class name, an external path) is ambiguous and must use $refCurie instead.
+# --------------------------------------------------------------------------
+
+
+def _build_ref_schema(tmp_path, ref_value):
+    schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://example.org/schema/refs/refs-source.yaml",
+        "title": "Refs",
+        "type": "object",
+        "$defs": {
+            "Other": {"maturity": "draft", "description": "other", "properties": {}},
+            "Main": {
+                "maturity": "draft",
+                "description": "main",
+                "properties": {"other": {"$ref": ref_value}},
+            },
+        },
+    }
+    fp = tmp_path / "refs-source.yaml"
+    with open(fp, "w") as f:
+        yaml.safe_dump(schema, f)
+    return YamlSchemaProcessor(fp)
+
+
+def test_bare_ref_is_rejected(tmp_path):
+    with pytest.raises(ValueError, match="refCurie"):
+        _build_ref_schema(tmp_path, "Other")
+
+
+def test_external_path_ref_is_rejected(tmp_path):
+    with pytest.raises(ValueError, match="refCurie"):
+        _build_ref_schema(tmp_path, "/ga4gh/schema/other/1.x/json/Other")
+
+
+def test_local_ref_is_allowed(tmp_path):
+    proc = _build_ref_schema(tmp_path, "#/$defs/Other")
+    assert proc.for_js["$defs"]["Main"]["properties"]["other"]["$ref"] == "#/$defs/Other"

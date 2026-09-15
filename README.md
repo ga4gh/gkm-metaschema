@@ -102,8 +102,8 @@ The metaschema processor expects the following hierarchy:
     │   |   ├── ...
     │   ├── Makefile
     ├── schema
-    │   ├──gks_schema
-    │   |   ├── gks-schema-source.yaml
+    │   ├──gkm_schema
+    │   |   ├── gkm-schema-source.yaml
     │   |   ├── Makefile
     │   |   ├── prune.mk
     │   ├── Makefile
@@ -115,9 +115,9 @@ The metaschema processor expects the following hierarchy:
   * `Makefile`: Commands to create the reStructuredText files.
     This file should not change across GKS projects.
 * `schema`: Schema directory. Can also contain submodules for other GKS product schemas.
-  * `gks_schema`: Schema directory for GKS product. The directory name should reflect
+  * `gkm_schema`: Schema directory for GKS product. The directory name should reflect
     the product, e.g. `vrs`.
-    * `gks-schema-source.yaml`: Source document for the JSON Schema 2020-12. The file name
+    * `gkm-schema-source.yaml`: Source document for the JSON Schema 2020-12. The file name
           should reflect the standard, e.g. `vrs-source.yaml`. The  file name **must** end
           with `-source.yaml`.
     * `Makefile`: Commands to create the reStructuredText and JSON files.
@@ -136,12 +136,12 @@ changes to the source document, from the _schema_ directory:
 The file structure will now look like:
 
     ├── schema
-    │   ├──gks_schema
+    │   ├──gkm_schema
     |   |   ├── def
     │   |   |   ├── ...
     |   |   ├── json
     │   |   |   ├── ...
-    │   |   ├── gks-schema-source.yaml
+    │   |   ├── gkm-schema-source.yaml
     │   |   ├── Makefile
     │   |   ├── prune.mk
     │   ├── Makefile

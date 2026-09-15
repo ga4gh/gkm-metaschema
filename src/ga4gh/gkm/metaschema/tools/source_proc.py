@@ -29,7 +29,10 @@ maturity_levels = {"deprecated": 0, "draft": 1, "trial use": 2, "normative": 3}
 
 class YamlSchemaProcessor:
     def __init__(self, schema_fp, root_fp=None):
-        self.schema_fp = Path(schema_fp)
+        # Resolved so schema_fp is canonical everywhere it's compared (e.g. a
+        # diamond import reaching the same file via two different relative
+        # routes must compare equal -- see _register_merge_import).
+        self.schema_fp = Path(schema_fp).resolve()
         self.imported = root_fp is not None
         self.root_schema_fp = root_fp
         self.raw_schema = self.load_schema(schema_fp)
@@ -37,10 +40,21 @@ class YamlSchemaProcessor:
         self.yaml_key = self.raw_schema.get("yaml-target", "yaml")
         self.json_key = self.raw_schema.get("json-target", "json")
         self.defs_key = self.raw_schema.get("def-target", "def")
+        # A ``XXX-profile-source.yaml`` file contributes ``XXX`` as a sub-namespace:
+        # its outputs live under ``<parent>/{yaml,json,def}/XXX`` (nested inside the
+        # shared output dirs, not as sibling top-level folders) and every class $id
+        # is ``.../<version>/json/XXX/<Class>``. XXX is taken from the filename and
+        # must match the $id's final path segment.
+        self.sub_namespace = self._profile_sub_namespace()
+        parent = self.schema_fp.parent
         # schema_root_name = str(self.schema_fp.stem)[:-7]  # removes "-source"
-        self.yaml_fp = self.schema_fp.parent / self.yaml_key
-        self.json_fp = self.schema_fp.parent / self.json_key
-        self.def_fp = self.schema_fp.parent / self.defs_key
+
+        def _out_fp(key):
+            return parent / key / self.sub_namespace if self.sub_namespace else parent / key
+
+        self.yaml_fp = _out_fp(self.yaml_key)
+        self.json_fp = _out_fp(self.json_key)
+        self.def_fp = _out_fp(self.defs_key)
         # self.def_fp = self.schema_fp.parent / self.raw_schema.get('def-target', f'def/{schema_root_name}')
         self.namespaces = self.raw_schema.get("namespaces", [])
         self.schema_def_keyword = SCHEMA_DEF_KEYWORD_BY_VERSION[self.raw_schema["$schema"]]
@@ -50,6 +64,33 @@ class YamlSchemaProcessor:
         self.strict = self.raw_schema.get("strict", False)
         self.enforce_ordered = self.raw_schema.get("enforce_ordered", self.strict)
         self._init_from_raw()
+
+    _PROFILE_SUFFIX = "-profile-source.yaml"
+
+    def _profile_sub_namespace(self):
+        """Sub-namespace ``XXX`` for a ``XXX-profile-source.yaml`` file, else None.
+
+        Validates that the ``XXX`` taken from the filename matches the ``XXX`` in
+        this schema's own ``$id`` (its final path segment); raises otherwise.
+        """
+        name = self.schema_fp.name
+        if not name.endswith(self._PROFILE_SUFFIX):
+            return None
+        xxx_file = name[: -len(self._PROFILE_SUFFIX)]
+        if not xxx_file:
+            return None
+        id_last = urlparse(self.id).path.rstrip("/").rsplit("/", 1)[-1]
+        xxx_id = id_last[: -len(self._PROFILE_SUFFIX)] if id_last.endswith(self._PROFILE_SUFFIX) else id_last
+        if xxx_id != xxx_file:
+            raise ValueError(
+                f"Profile source '{name}' has a sub-namespace '{xxx_file}' (from the "
+                f"filename), but its $id's final path segment is '{id_last}', which "
+                f"gives '{xxx_id}'. For an 'XXX-profile-source.yaml' file the 'XXX' "
+                f"must be identical in the filename and the $id. Fix: set the $id's "
+                f"last path segment to '{name}' (e.g. "
+                f"'.../<version>/{name}')."
+            )
+        return xxx_file
 
     def _init_from_raw(self):
         self.has_children_urls = {}
@@ -127,15 +168,18 @@ class YamlSchemaProcessor:
             assert len(defined_classes & other.processed_classes) == 0
             defined_classes.update(other.processed_classes)
 
+        # Every curie prefix declared anywhere in the merged content -- by
+        # this source itself, or by any transitively-imported source -- must
+        # now resolve locally, since everything lives in one flat document
+        # after the merge. Curie prefixes (e.g. "gkm.core") are a distinct
+        # namespace from import dependency names (e.g. "gkm-core"), so this
+        # is keyed by ``namespaces:`` keys, not ``import_process_order``.
+        for ns in self.raw_schema.get("namespaces", {}):
+            self.namespaces[ns] = f"#/{self.schema_def_keyword}/"
         for key in self.import_process_order:
-            self.namespaces[key] = f"#/{self.schema_def_keyword}/"
             other = self.import_processors[key]
-            other_ns = other.raw_schema.get("namespaces", [])
-            if other_ns:
-                for ns in other_ns:
-                    if ns not in self.import_process_order:
-                        # Handle external refs that do not match imports
-                        self.namespaces[key] = other.namespaces[key]
+            for ns in other.raw_schema.get("namespaces", {}):
+                self.namespaces[ns] = f"#/{self.schema_def_keyword}/"
             self.raw_defs.update(other.raw_defs)
 
         # revise all class.inherits attributes from CURIE to local defs
@@ -176,12 +220,27 @@ class YamlSchemaProcessor:
             return obj
         return obj
 
-    def _register_merge_import(self, proc):
+    def _register_merge_import(self, proc, seen=None):
+        # ``seen`` memoizes which imported files have already had their own
+        # import subtree walked, keyed by resolved schema_fp. A diamond (e.g.
+        # cat-vrs importing both gkm-core directly and vrs, which itself
+        # imports gkm-core) would otherwise re-descend into the same file's
+        # imports once per distinct path that reaches it -- redundant, and
+        # exponential on deeper graphs.
+        if seen is None:
+            seen = set()
         for name, other in proc.imports.items():
-            self._register_merge_import(other)
+            if other.schema_fp not in seen:
+                seen.add(other.schema_fp)
+                self._register_merge_import(other, seen)
             if name in self.import_locations:
                 # check that all imports from imported point to same locations
-                assert self.import_locations[name] == other.schema_fp
+                if self.import_locations[name] != other.schema_fp:
+                    raise ValueError(
+                        f"Import name {name!r} resolves to two different files: "
+                        f"{self.import_locations[name]} and {other.schema_fp}. Fix: use the same import "
+                        f"path for {name!r} everywhere it's imported."
+                    )
             else:
                 self.import_locations[name] = other.schema_fp
                 self.import_processors[name] = other
@@ -200,6 +259,10 @@ class YamlSchemaProcessor:
             if not fp.is_absolute():
                 base_path = self.schema_fp.parent
                 fp = base_path.joinpath(fp)
+            # Resolve so the same underlying file reached via two different
+            # relative routes (e.g. a diamond import) compares equal by path
+            # rather than by the literal (unnormalized) string used to reach it.
+            fp = fp.resolve()
             if self.imported:
                 root_fp = self.root_schema_fp
             else:
@@ -313,11 +376,20 @@ class YamlSchemaProcessor:
                     new_k = k[:-5]
                     processed_node[new_k] = self.resolve_curie(v)
                     del processed_node[k]
-                elif k == "$ref" and v.startswith("#/") and self.imported:
-                    # TODO: fix below hard-coded name convention, yuck.
-                    rel_root = self.schema_fp.parent.relative_to(self.root_schema_fp.parent, walk_up=True)
-                    schema_stem = self.schema_fp.stem.split("-")[0]
-                    processed_node[k] = str(rel_root / f"{schema_stem}.json{v}")
+                elif k == "$ref":
+                    if not v.startswith("#/"):
+                        raise ValueError(
+                            f"Ambiguous $ref {v!r} in '{self.schema_fp.name}'. A '$ref' value must be a local "
+                            f"reference starting with '#/{self.schema_def_keyword}/' (e.g. "
+                            f"'#/{self.schema_def_keyword}/{v.rsplit('/', 1)[-1].split('.')[0] or 'MyClass'}'). "
+                            "Fix: for a reference to a class in another schema, use "
+                            "'$refCurie: <namespace>:<Class>' instead."
+                        )
+                    if self.imported:
+                        # TODO: fix below hard-coded name convention, yuck.
+                        rel_root = self.schema_fp.parent.relative_to(self.root_schema_fp.parent, walk_up=True)
+                        schema_stem = self.schema_fp.stem.split("-")[0]
+                        processed_node[k] = str(rel_root / f"{schema_stem}.json{v}")
                 else:
                     self.process_property_tree_refs(raw_node[k], processed_node[k])
         elif isinstance(raw_node, list):
@@ -369,7 +441,13 @@ class YamlSchemaProcessor:
             class_ref = schema_class
         parsed_url = urlparse(self.id)
         parsed_id_path = parsed_url.path
-        revised_path = Path(parsed_id_path).parent.joinpath(export_key, class_ref)
+        base = Path(parsed_id_path).parent
+        # Profile sources inject their sub-namespace after the export key so
+        # class $ids read ``.../<version>/json/XXX/<Class>``.
+        if self.sub_namespace:
+            revised_path = base.joinpath(export_key, self.sub_namespace, class_ref)
+        else:
+            revised_path = base.joinpath(export_key, class_ref)
         return str(revised_path)
 
     def process_schema_class(self, schema_class):

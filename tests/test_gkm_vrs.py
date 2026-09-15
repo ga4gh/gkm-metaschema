@@ -1,19 +1,21 @@
 """Scoped tests for the metaschema processor.
 
-These tests exercise the migrated schema set: ``gkm-core-source.yaml``,
-``vrs-source.yaml`` (imports gkm-core), ``cat-vrs-source.yaml`` (imports
-gkm-core + vrs), ``recipes-source.yaml`` (imports cat-vrs), and the va-spec
-schemas under ``data/va-spec`` (base: domain-entities + va-core; profiles:
-aac-2017, acmg-2015, ccv-2022). Other source YAMLs are intentionally excluded
-for now while the set is mid-migration.
+These tests exercise every ``*-source.yaml`` in this repo's test fixtures:
+``gkm-core-source.yaml``, ``vrs-source.yaml`` (imports gkm-core),
+``cat-vrs-source.yaml`` (imports gkm-core + vrs), ``recipes-source.yaml``
+(imports cat-vrs), and the va-spec schemas under ``data/va-spec`` (base:
+domain-entities + va-core; profiles: aac-2017, acmg-2015, ccv-2022).
 
 They also lock in the removal of ``extends`` property renaming: subclasses
 specialize an inherited property by reusing its name (auto-merge, subclass
 attributes win) and may no longer rename inherited properties.
 """
 
+import json
 import os
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -30,14 +32,16 @@ VRS = root / "data/vrs/vrs-source.yaml"
 CAT_VRS = root / "data/catvrs/cat-vrs-source.yaml"
 RECIPES = root / "data/catvrs/recipes-source.yaml"
 
-# va-spec: base/ holds two schemas that share one json/ + def/ output dir;
-# each profile lives in its own directory.
-DOMAIN_ENTITIES = root / "data/va-spec/base/domain-entities-source.yaml"
-VA_CORE = root / "data/va-spec/base/va-core-source.yaml"
+# va-spec is flat: all sources live at the va-spec/ top level. domain-entities +
+# va-core share one json/ + def/ output dir (va-spec/); each XXX-profile-source
+# writes into its own sub-namespace dir nested inside those (va-spec/json/XXX +
+# va-spec/def/XXX), so va-spec/ itself only ever has json/ and def/ children.
+DOMAIN_ENTITIES = root / "data/va-spec/domain-entities-source.yaml"
+VA_CORE = root / "data/va-spec/va-core-source.yaml"
 VA_PROFILES = [
-    root / "data/va-spec/aac-2017/profile-source.yaml",
-    root / "data/va-spec/acmg-2015/profile-source.yaml",
-    root / "data/va-spec/ccv-2022/profile-source.yaml",
+    root / "data/va-spec/aac-2017-profile-source.yaml",
+    root / "data/va-spec/acmg-2015-profile-source.yaml",
+    root / "data/va-spec/ccv-2022-profile-source.yaml",
 ]
 VA_SPEC_ALL = [DOMAIN_ENTITIES, VA_CORE, *VA_PROFILES]
 
@@ -188,7 +192,7 @@ def test_va_spec_builds(src):
 
 
 def test_va_spec_base_outputs_generated():
-    """domain-entities and va-core share base/json and base/def; generate
+    """domain-entities and va-core share va-spec/json and va-spec/def; generate
     domain-entities first (clean), then va-core without wiping its docs."""
     de = YamlSchemaProcessor(DOMAIN_ENTITIES)
     _generate_outputs(de, clean=True)
@@ -203,12 +207,221 @@ def test_va_spec_base_outputs_generated():
     assert (de.def_fp / "Condition.rst").exists()
 
 
-@pytest.mark.parametrize("src", VA_PROFILES, ids=lambda p: p.parent.name)
+@pytest.mark.parametrize("src", VA_PROFILES, ids=lambda p: p.name.replace("-profile-source.yaml", ""))
 def test_va_spec_profile_outputs_generated(src):
     proc = YamlSchemaProcessor(src)
     _generate_outputs(proc)
     assert proc.json_fp.is_dir() and any(proc.json_fp.iterdir())
     assert proc.def_fp.is_dir() and any(proc.def_fp.iterdir())
+
+
+def test_profile_def_contains_only_own_classes():
+    """A profile's def/XXX holds exactly its own classes -- the same set as
+    json/XXX -- not the classes it reaches via import. Those land in the
+    shared top-level def/ instead (see y2t.main's own_def_fp/top_def_fp
+    split). A regression back to full-closure-per-profile (every class y2t
+    can see duplicated into every profile's own subfolder) would pass
+    test_va_spec_profile_outputs_generated (it only checks non-empty) but
+    fail this.
+    """
+    proc = YamlSchemaProcessor(root / "data/va-spec/aac-2017-profile-source.yaml")
+    _generate_outputs(proc)
+    own_json_classes = {p.name for p in proc.json_fp.iterdir()}
+    own_def_classes = {p.stem for p in proc.def_fp.glob("*.rst")}
+    assert own_def_classes == own_json_classes
+
+    # classes reached only via import (owned by va-core/gkm-core, not
+    # aac-2017) must NOT be duplicated into aac-2017's own subfolder...
+    assert "EvidenceLine" not in own_def_classes
+    assert "Coding" not in own_def_classes
+    # ...they land in the shared top-level def/ instead.
+    top_def_fp = proc.def_fp.parent
+    assert (top_def_fp / "EvidenceLine.rst").exists()
+    assert (top_def_fp / "Coding.rst").exists()
+
+
+def test_cross_references_span_whole_folder_not_just_rendering_source():
+    """Used in:/Subclasses: on a shared top-level def/ file (e.g. gkm-core's
+    Coding, pulled in by every va-spec profile) must reflect every profile
+    that references it, not just whichever profile's y2t run wrote the file
+    -- otherwise the list silently depends on build order (see
+    METASCHEMA_BEHAVIOR.md History). Generating *only* aac-2017 here must
+    still surface acmg-2015's and ccv-2022's own references to Coding, which
+    proves the cross-reference computation spans the whole folder
+    (y2t._folder_xref_processors), not just aac-2017's own closure
+    (y2t._folder_processors). This holds regardless of what any other test
+    already wrote to this shared file: render_class overwrites the file (not
+    appends), so its content after this call is entirely attributable to
+    this call's own computation.
+    """
+    aac = YamlSchemaProcessor(root / "data/va-spec/aac-2017-profile-source.yaml")
+    _generate_outputs(aac)
+    coding_rst = (aac.def_fp.parent / "Coding.rst").read_text()
+    assert "AmpAscoCapEvidenceLine" in coding_rst  # aac-2017's own reference
+    assert "VariantPathogenicityStatement" in coding_rst  # acmg-2015, a sibling
+    assert "VariantOncogenicityStatement" in coding_rst  # ccv-2022, a sibling
+
+
+def _copy_va_spec_data_tree(tmp_path):
+    """Copy the whole ``tests/data/`` tree -- not just va-spec -- into an
+    isolated ``tmp_path``, preserving the relative sibling layout va-spec's
+    imports depend on (``../gkm-core/...``, ``../vrs/...``,
+    ``../catvrs/...``). Build artifacts are excluded so each test starts
+    from a clean slate. Returns the copied ``va-spec`` directory.
+    """
+    dest = tmp_path / "data"
+    shutil.copytree(root / "data", dest, ignore=shutil.ignore_patterns("build", "json", "def"))
+    return dest / "va-spec"
+
+
+def _run_make(cwd):
+    """Run ``make`` in ``cwd`` with this venv's console scripts (source2classes,
+    source2splitjs, y2t) on PATH, matching how the real Makefile invokes them.
+    """
+    env = os.environ.copy()
+    env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
+    result = subprocess.run(["make"], cwd=cwd, env=env, capture_output=True, text=True)
+    assert result.returncode == 0, f"make failed in {cwd}:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+
+
+def _throwaway_class_yaml(name):
+    return (
+        f"\n  {name}:\n"
+        "    maturity: draft\n"
+        "    description: throwaway class for a prune.mk regression test\n"
+        "    type: object\n"
+        "    properties:\n"
+        "      note:\n"
+        "        type: string\n"
+    )
+
+
+@pytest.mark.skipif(shutil.which("make") is None, reason="make is not available")
+def test_prune_removes_stale_profile_class_output(tmp_path):
+    """prune.mk must remove a class's stale json/XXX + def/XXX output once
+    that class is removed from its own profile source. Runs the REAL
+    va-spec Makefile/prune.mk (copied into an isolated tmp_path so it can
+    safely mutate a source and rebuild without touching the committed
+    fixtures).
+    """
+    va_spec = _copy_va_spec_data_tree(tmp_path)
+    aac = va_spec / "aac-2017-profile-source.yaml"
+    original = aac.read_text()
+
+    aac.write_text(original + _throwaway_class_yaml("ZzzThrowawayTestClass"))
+    _run_make(va_spec)
+    json_out = va_spec / "json/aac-2017/ZzzThrowawayTestClass"
+    def_out = va_spec / "def/aac-2017/ZzzThrowawayTestClass.rst"
+    assert json_out.exists()
+    assert def_out.exists()
+
+    # remove the class and rebuild -- prune.mk must clean up its stale output
+    aac.write_text(original)
+    _run_make(va_spec)
+    assert not json_out.exists()
+    assert not def_out.exists()
+    # the profile's real classes survived the rebuild + prune
+    assert (va_spec / "json/aac-2017/AmpAscoCapEvidenceLine").exists()
+    assert (va_spec / "def/aac-2017/AmpAscoCapEvidenceLine.rst").exists()
+
+
+@pytest.mark.skipif(shutil.which("make") is None, reason="make is not available")
+def test_prune_leaves_stale_top_level_def_alone(tmp_path):
+    """The shared top-level def/ is intentionally NOT pruned when a class is
+    removed from a base source -- it's a regenerated closure, cleared only
+    by ``make clean`` (see METASCHEMA_BEHAVIOR.md's prune.mk rationale).
+    json/ for the same removed class IS pruned, same as any other class
+    removal.
+    """
+    va_spec = _copy_va_spec_data_tree(tmp_path)
+    domain_entities = va_spec / "domain-entities-source.yaml"
+    original = domain_entities.read_text()
+
+    domain_entities.write_text(original + _throwaway_class_yaml("ZzzThrowawayBaseClass"))
+    _run_make(va_spec)
+    json_out = va_spec / "json/ZzzThrowawayBaseClass"
+    def_out = va_spec / "def/ZzzThrowawayBaseClass.rst"
+    assert json_out.exists()
+    assert def_out.exists()
+
+    domain_entities.write_text(original)
+    _run_make(va_spec)
+    assert not json_out.exists()  # json/ is pruned
+    assert def_out.exists()  # def/ is intentionally left stale
+
+
+@pytest.mark.parametrize("src", VA_PROFILES, ids=lambda p: p.name.replace("-profile-source.yaml", ""))
+def test_profile_sub_namespace_routing(src):
+    """A ``XXX-profile-source.yaml`` routes its outputs and class $ids through the
+    ``XXX`` sub-namespace, nested inside the shared ``json``/``def`` dirs
+    (``<parent>/{json,def}/XXX`` and ``.../json/XXX/<Class>``)."""
+    xxx = src.name.replace("-profile-source.yaml", "")
+    proc = YamlSchemaProcessor(src)
+    assert proc.sub_namespace == xxx
+    assert proc.json_fp == src.parent / "json" / xxx
+    assert proc.def_fp == src.parent / "def" / xxx
+    some_class = next(iter(proc.for_js["$defs"]))
+    assert f"/json/{xxx}/{some_class}" in proc.get_class_uri(some_class, "json")
+
+
+def test_profile_ref_to_base_class_omits_sub_namespace(tmp_path):
+    """A profile class's $ref to a class owned by a non-profile source (e.g.
+    va-core's EvidenceLine) must resolve to that source's own path, with no
+    sub-namespace segment injected -- the sub-namespace belongs to the
+    referencing profile, not to a class the profile doesn't own."""
+    proc = YamlSchemaProcessor(root / "data/va-spec/aac-2017-profile-source.yaml")
+    split_defs_to_js(proc)
+    amp = json.loads((proc.json_fp / "AmpAscoCapEvidenceLine").read_text())
+    evidence_line_ref = amp["allOf"][0]["$ref"]
+    assert evidence_line_ref.endswith("/json/EvidenceLine")
+    assert "/aac-2017/" not in evidence_line_ref
+
+
+def test_profile_ref_to_sibling_class_includes_sub_namespace(tmp_path):
+    """A profile class's $ref to another class defined in the *same* profile
+    source must include the profile's own sub-namespace segment, matching how
+    that sibling class's own json/ output is routed."""
+    schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://example.org/schema/xxxprof/1.0.0/xxxprof-profile-source.yaml",
+        "title": "XxxProf",
+        "type": "object",
+        "$defs": {
+            "First": {
+                "maturity": "draft",
+                "description": "first",
+                "type": "object",
+                "properties": {"second": {"$ref": "#/$defs/Second"}},
+            },
+            "Second": {
+                "maturity": "draft",
+                "description": "second",
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+            },
+        },
+    }
+    fp = tmp_path / "xxxprof-profile-source.yaml"
+    with open(fp, "w") as f:
+        yaml.safe_dump(schema, f)
+    proc = YamlSchemaProcessor(fp)
+    split_defs_to_js(proc)
+    first = json.loads((proc.json_fp / "First").read_text())
+    second_ref = first["properties"]["second"]["$ref"]
+    assert second_ref.endswith("/json/xxxprof/Second")
+
+
+def test_profile_sub_namespace_mismatch_raises(tmp_path):
+    """If the filename's XXX and the $id's final segment disagree, raise."""
+    fp = tmp_path / "xyz-profile-source.yaml"
+    fp.write_text(
+        '$schema: "https://json-schema.org/draft/2020-12/schema"\n'
+        '$id: "https://w3id.org/ga4gh/schema/va-spec/1.0.0-msp.test/WRONG-profile-source.yaml"\n'
+        "title: X\n"
+        "$defs: {}\n"
+    )
+    with pytest.raises(ValueError, match="sub-namespace"):
+        YamlSchemaProcessor(fp)
 
 
 def test_same_name_override_merges_inherited_attributes():
