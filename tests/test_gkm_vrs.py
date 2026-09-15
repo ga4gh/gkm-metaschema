@@ -22,6 +22,7 @@ import pytest
 import yaml
 
 from ga4gh.gkm.metaschema.scripts.source2splitjs import split_defs_to_js
+from ga4gh.gkm.metaschema.scripts.y2t import build_cross_references
 from ga4gh.gkm.metaschema.scripts.y2t import main as y2t
 from ga4gh.gkm.metaschema.scripts.y2t import render_class
 from ga4gh.gkm.metaschema.tools.source_proc import YamlSchemaProcessor
@@ -131,6 +132,40 @@ def test_abstract_class_has_no_ga4gh_digest(vrs_processor, tmp_path):
     # A concrete GA4GH-identifiable subclass still renders the digest.
     concrete_rst = _render_one(vrs_processor, "Allele", tmp_path)
     assert "GA4GH Digest" in concrete_rst
+
+
+def test_sealed_class_renders_explanatory_note(vrs_processor, tmp_path):
+    """A sealed class's .rst carries a **Sealed** note explaining the closed
+    subclass restriction, right alongside the **Abstract Class** note. A
+    merely-abstract (not sealed) class gets the Abstract Class note but not
+    the Sealed one.
+    """
+    assert vrs_processor.class_is_abstract("Variation")
+    sealed_rst = _render_one(vrs_processor, "Variation", tmp_path)
+    assert "**Abstract Class**" in sealed_rst
+    assert "**Sealed**" in sealed_rst
+    assert "Variation has a closed, exhaustive set of concrete subclasses" in sealed_rst
+
+    assert vrs_processor.class_is_abstract("Ga4ghIdentifiableObject")
+    unsealed_rst = _render_one(vrs_processor, "Ga4ghIdentifiableObject", tmp_path)
+    assert "**Abstract Class**" in unsealed_rst
+    assert "**Sealed**" not in unsealed_rst
+
+
+def test_used_in_omits_transitive_subclass_enumeration_mirror(vrs_processor):
+    """Sealed Variation's auto-derived oneOf directly $refs Allele (a
+    grandchild, reached transitively through the abstract MolecularVariation)
+    -- but Allele's Used in: must not list Variation for it, or it duplicates
+    the Subclasses: relationship already shown on MolecularVariation's page.
+    Regression test for a bug where the mirror-suppression only caught a
+    *direct* parent/child pair, not a transitive one.
+    """
+    owners = {name: vrs_processor for name in vrs_processor.processed_schema[vrs_processor.schema_def_keyword]}
+    used_in, subclasses = build_cross_references(owners)
+    assert "Variation" not in used_in.get("Allele", set())
+    # the direct relationship is unaffected: MolecularVariation's own
+    # Subclasses: still correctly lists Allele.
+    assert "Allele" in subclasses.get("MolecularVariation", set())
 
 
 def _generate_outputs(proc, clean=True):

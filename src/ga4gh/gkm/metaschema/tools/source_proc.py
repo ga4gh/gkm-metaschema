@@ -66,6 +66,9 @@ class YamlSchemaProcessor:
         self._init_from_raw()
 
     _PROFILE_SUFFIX = "-profile-source.yaml"
+    # Internal marker set on a sealed class's raw def once its oneOf has been
+    # derived -- see _resolve_sealed_classes. Stripped in clean_for_js.
+    _SEALED_MARKER = "_sealed_derived_oneOf"
 
     def _profile_sub_namespace(self):
         """Sub-namespace ``XXX`` for a ``XXX-profile-source.yaml`` file, else None.
@@ -124,6 +127,18 @@ class YamlSchemaProcessor:
         ``self.has_children`` (not built yet at this point in ``_init_from_raw``)
         -- same-source only, matching ``build_inheritance_dicts``'s own rule
         that a cross-source ``inherits: namespace:Class`` isn't registered.
+
+        Idempotent: a class already resolved carries the internal
+        ``_SEALED_MARKER`` key, so re-running this (``_init_from_raw`` runs a
+        second time from ``merge_imported()``) or merging in an
+        already-resolved class from a *different* processor instance's
+        ``raw_defs`` (``import_dependencies`` builds one instance per import
+        edge, so the same class can be independently resolved more than
+        once and then merged together) is a no-op rather than tripping the
+        "already has oneOf" conflict guard against its own previously-derived
+        oneOf. The marker lives on the dict itself (not instance state)
+        specifically so it survives that cross-instance ``dict.update()``
+        merge.
         """
         if self.raw_defs is None:
             return
@@ -147,6 +162,8 @@ class YamlSchemaProcessor:
 
         for cls, cls_def in self.raw_defs.items():
             if not cls_def.get("sealed", False):
+                continue
+            if cls_def.get(self._SEALED_MARKER, False):
                 continue
             if not cls_def.get("abstract", False):
                 raise ValueError(
@@ -177,6 +194,7 @@ class YamlSchemaProcessor:
                     "'sealed'."
                 )
             cls_def["oneOf"] = [{"$ref": f"#/{self.schema_def_keyword}/{d}"} for d in descendants]
+            cls_def[self._SEALED_MARKER] = True
 
     def build_inheritance_dicts(self):
         # For all classes:
@@ -788,6 +806,7 @@ class YamlSchemaProcessor:
             # the flag itself carries no further information for a consumer
             # of the emitted schema.
             schema_definition.pop("sealed", None)
+            schema_definition.pop(self._SEALED_MARKER, None)
             schema_definition.pop("header_level", None)
             if "description" in schema_definition:
                 schema_definition["description"] = self._scrub_rst_markup(schema_definition["description"])

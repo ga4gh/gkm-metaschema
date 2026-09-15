@@ -79,10 +79,11 @@ def test_resolve_curie_unknown_namespace_raises(vrs_processor: YamlSchemaProcess
 @pytest.mark.parametrize(
     "cls,abstract,primitive,container,ga4gh_identifiable",
     [
-        ("Ga4ghIdentifiableObject", True, False, False, False),
         # abstract, but no class-level oneOf/anyOf -> not a container
-        ("Variation", True, False, False, False),
-        ("Location", True, False, False, False),
+        ("Ga4ghIdentifiableObject", True, False, False, False),
+        # abstract + sealed -> auto-derived oneOf -> a container
+        ("Variation", True, False, True, False),
+        ("Location", True, False, True, False),
         ("Allele", False, False, False, True),
         ("SequenceLocation", False, False, False, True),
         ("Expression", False, False, False, False),
@@ -404,3 +405,18 @@ def test_sealed_with_only_abstract_descendants_is_rejected(tmp_path):
                 "Bar": {"maturity": "draft", "abstract": True, "inherits": "Foo", "description": "y"},
             },
         )
+
+
+def test_sealed_resolution_is_idempotent_across_reprocessing(tmp_path):
+    """_resolve_sealed_classes runs again whenever _init_from_raw does (e.g.
+    merge_imported() re-derives processed_schema/for_js after merging in
+    every import's raw_defs). A sealed class already resolved in an earlier
+    pass must not trip the "already has oneOf" conflict guard against its
+    own previously-derived oneOf -- regression test for a real bug where
+    merge_imported() raised on every sealed class.
+    """
+    proc = _build_sealed_schema(tmp_path, _SHAPE_HIERARCHY)
+    before = proc.for_js["$defs"]["Shape"]["oneOf"]
+    proc.merge_imported()  # re-invokes _init_from_raw on the same instance
+    after = proc.for_js["$defs"]["Shape"]["oneOf"]
+    assert after == before == [{"$ref": "#/$defs/Circle"}, {"$ref": "#/$defs/Square"}]

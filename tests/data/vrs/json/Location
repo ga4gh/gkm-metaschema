@@ -9,6 +9,14 @@
    "discriminator": {
       "propertyName": "type"
    },
+   "oneOf": [
+      {
+         "$ref": "/ga4gh/schema/vrs/1.0.0-msp.test/json/RelativeSequenceLocation"
+      },
+      {
+         "$ref": "/ga4gh/schema/vrs/1.0.0-msp.test/json/SequenceLocation"
+      }
+   ],
    "ga4gh": {
       "inherent": [
          "type"

@@ -307,6 +307,30 @@ a class into that narrower contract:
 - **`sealed` itself is stripped** from the emitted JSON Schema once
   materialized into `oneOf` — like the other metaschema-only keywords, it
   carries no further information for a consumer of the output.
+- **Idempotent.** Resolution runs again whenever `_init_from_raw` does —
+  which happens more than once on the same class in two situations:
+  `merge_imported()` re-derives everything after merging in every import's
+  `raw_defs`, and `import_dependencies` builds one `YamlSchemaProcessor`
+  instance *per import edge*, so the same file (and the same sealed class in
+  it) can be independently resolved more than once and then merged together
+  by `merge_imported()`. An internal marker on the class's raw def (stripped
+  like `sealed` itself) records that its `oneOf` was already derived, so a
+  repeat pass is a no-op instead of tripping the "already has `oneOf`"
+  conflict guard against its own previously-derived union.
+- **`y2t`'s RST** carries an explanatory **Sealed** note (alongside the
+  **Abstract Class** note) spelling out the restriction in prose, since
+  "must match one of the following" on its own doesn't say *why* the list is
+  exhaustive.
+- **Used in:/Subclasses: stay accurate for transitively-sealed hierarchies.**
+  A sealed class's `oneOf` can `$ref` a *grandchild* class (reached through
+  an abstract intermediate — e.g. `Variation`, sealed, directly `$ref`s
+  `Allele`, whose actual parent is the abstract `MolecularVariation`).
+  Without accounting for this, that `$ref` would show up as a spurious
+  **Used in:** `Variation` entry on `Allele`'s page, duplicating the
+  **Subclasses:** relationship already shown on `MolecularVariation`'s page.
+  `build_cross_references`'s existing "skip the container's own subclass
+  enumeration" rule (see [§8](#8-outputs)) was extended from a direct
+  parent/child check to a transitive one to cover this.
 
 Sealing a class is a **non-breaking, purely additive** change from the
 perspective of anything that references it: every existing `$ref`/`$refCurie`

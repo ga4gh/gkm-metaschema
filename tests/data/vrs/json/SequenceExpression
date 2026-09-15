@@ -50,5 +50,16 @@
    },
    "required": [
       "type"
+   ],
+   "oneOf": [
+      {
+         "$ref": "/ga4gh/schema/vrs/1.0.0-msp.test/json/LengthExpression"
+      },
+      {
+         "$ref": "/ga4gh/schema/vrs/1.0.0-msp.test/json/LiteralSequenceExpression"
+      },
+      {
+         "$ref": "/ga4gh/schema/vrs/1.0.0-msp.test/json/ReferenceLengthExpression"
+      }
    ]
 }

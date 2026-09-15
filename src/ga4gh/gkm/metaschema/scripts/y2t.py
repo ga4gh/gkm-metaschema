@@ -407,13 +407,31 @@ def _collect_ref_names(node, out: set) -> None:
             _collect_ref_names(item, out)
 
 
+def _inherits_from(descendant: str, ancestor: str, parent: dict) -> bool:
+    """True if ``descendant`` reaches ``ancestor`` by walking ``inherits``
+    upward zero or more times (i.e. ``ancestor`` is ``descendant``'s direct or
+    transitive superclass)."""
+    seen: set = set()
+    current = parent.get(descendant)
+    while current is not None and current not in seen:
+        if current == ancestor:
+            return True
+        seen.add(current)
+        current = parent.get(current)
+    return False
+
+
 def build_cross_references(owners: dict):
     """Compute (used_in, subclasses) over the class closure in ``owners``.
 
     ``subclasses[X]`` = classes whose ``inherits`` resolves to X.
     ``used_in[X]``   = classes that reference X via $ref/$refCurie (property or
-    composition), excluding the abstract-parent-enumerates-its-subclass mirror.
-    Only targets present in the closure are recorded, so every :ref: resolves.
+    composition), excluding the abstract-parent-enumerates-its-subclass mirror
+    -- direct (a class's own oneOf/anyOf lists its immediate children) or
+    transitive (a sealed class's auto-derived oneOf lists concrete
+    descendants reached through an abstract intermediate; see
+    _resolve_sealed_classes). Only targets present in the closure are
+    recorded, so every :ref: resolves.
     """
     parent: dict = {}
     for name, proc in owners.items():
@@ -432,7 +450,7 @@ def build_cross_references(owners: dict):
         for target in refs:
             if target == name or target not in owners:
                 continue
-            if parent.get(target) == name:  # skip subclass-enumeration mirror
+            if _inherits_from(target, name, parent):  # skip subclass-enumeration mirror
                 continue
             used_in.setdefault(target, set()).add(name)
     return used_in, subclasses
@@ -466,6 +484,14 @@ def render_class(
                 "**Abstract Class** — not instantiated directly; concrete subclasses inherit its attributes.\n",
                 file=f,
             )
+            if class_definition.get("sealed", False):
+                print(
+                    f"**Sealed** — {class_name} has a closed, exhaustive set of "
+                    "concrete subclasses; every one is listed below. No other "
+                    "subclass is permitted, and a conforming instance must be "
+                    "exactly one of these types.\n",
+                    file=f,
+                )
         print("**Computational Definition**\n", file=f)
         print(class_definition["description"], file=f)
         if proc.class_is_passthrough(class_name):
