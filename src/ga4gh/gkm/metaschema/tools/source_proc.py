@@ -37,10 +37,16 @@ class YamlSchemaProcessor:
         self.yaml_key = self.raw_schema.get("yaml-target", "yaml")
         self.json_key = self.raw_schema.get("json-target", "json")
         self.defs_key = self.raw_schema.get("def-target", "def")
+        # A ``XXX-profile-source.yaml`` file contributes ``XXX`` as a sub-namespace:
+        # its outputs live under ``<parent>/XXX/{json,def}`` and every class $id
+        # is ``.../<version>/XXX/json/<Class>``. XXX is taken from the filename and
+        # must match the $id's final path segment.
+        self.sub_namespace = self._profile_sub_namespace()
+        out_base = self.schema_fp.parent / self.sub_namespace if self.sub_namespace else self.schema_fp.parent
         # schema_root_name = str(self.schema_fp.stem)[:-7]  # removes "-source"
-        self.yaml_fp = self.schema_fp.parent / self.yaml_key
-        self.json_fp = self.schema_fp.parent / self.json_key
-        self.def_fp = self.schema_fp.parent / self.defs_key
+        self.yaml_fp = out_base / self.yaml_key
+        self.json_fp = out_base / self.json_key
+        self.def_fp = out_base / self.defs_key
         # self.def_fp = self.schema_fp.parent / self.raw_schema.get('def-target', f'def/{schema_root_name}')
         self.namespaces = self.raw_schema.get("namespaces", [])
         self.schema_def_keyword = SCHEMA_DEF_KEYWORD_BY_VERSION[self.raw_schema["$schema"]]
@@ -50,6 +56,33 @@ class YamlSchemaProcessor:
         self.strict = self.raw_schema.get("strict", False)
         self.enforce_ordered = self.raw_schema.get("enforce_ordered", self.strict)
         self._init_from_raw()
+
+    _PROFILE_SUFFIX = "-profile-source.yaml"
+
+    def _profile_sub_namespace(self):
+        """Sub-namespace ``XXX`` for a ``XXX-profile-source.yaml`` file, else None.
+
+        Validates that the ``XXX`` taken from the filename matches the ``XXX`` in
+        this schema's own ``$id`` (its final path segment); raises otherwise.
+        """
+        name = self.schema_fp.name
+        if not name.endswith(self._PROFILE_SUFFIX):
+            return None
+        xxx_file = name[: -len(self._PROFILE_SUFFIX)]
+        if not xxx_file:
+            return None
+        id_last = urlparse(self.id).path.rstrip("/").rsplit("/", 1)[-1]
+        xxx_id = id_last[: -len(self._PROFILE_SUFFIX)] if id_last.endswith(self._PROFILE_SUFFIX) else id_last
+        if xxx_id != xxx_file:
+            raise ValueError(
+                f"Profile source '{name}' has a sub-namespace '{xxx_file}' (from the "
+                f"filename), but its $id's final path segment is '{id_last}', which "
+                f"gives '{xxx_id}'. For an 'XXX-profile-source.yaml' file the 'XXX' "
+                f"must be identical in the filename and the $id. Fix: set the $id's "
+                f"last path segment to '{name}' (e.g. "
+                f"'.../<version>/{name}')."
+            )
+        return xxx_file
 
     def _init_from_raw(self):
         self.has_children_urls = {}
@@ -369,7 +402,12 @@ class YamlSchemaProcessor:
             class_ref = schema_class
         parsed_url = urlparse(self.id)
         parsed_id_path = parsed_url.path
-        revised_path = Path(parsed_id_path).parent.joinpath(export_key, class_ref)
+        base = Path(parsed_id_path).parent
+        # Profile sources inject their sub-namespace before the export key so
+        # class $ids read ``.../<version>/XXX/json/<Class>``.
+        if self.sub_namespace:
+            base = base.joinpath(self.sub_namespace)
+        revised_path = base.joinpath(export_key, class_ref)
         return str(revised_path)
 
     def process_schema_class(self, schema_class):

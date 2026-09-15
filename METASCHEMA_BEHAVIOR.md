@@ -205,11 +205,35 @@ Why the distinction matters:
   - `y2t` is a **folder-level** build: it renders every class in a folder's
     import closure (all `*-source.yaml` beside it plus their imports,
     recursively) into that folder's `def/`, so the folder is self-contained and
-    its cross-reference lists are accurate *from that folder's perspective*.
+    its cross-reference lists are accurate *from that folder's perspective*. A
+    **profile source is the exception** — it is its own documentation unit (see
+    [§9](#9-profile-sub-namespaces)) and is never grouped with siblings.
 
 Imports are only pulled in as dependencies; a schema's own `json/` artifacts are
 produced only when the scripts are run **on that schema's processor** (see the
 tests for examples).
+
+## 9. Profile sub-namespaces
+
+A source file named **`XXX-profile-source.yaml`** contributes `XXX` as a
+**sub-namespace**. This lets several profiles live side-by-side in one folder
+(e.g. all of `va-spec/`) while each keeps a distinct output location and `$id`
+space:
+
+- **Outputs** go to `<parent>/XXX/json` and `<parent>/XXX/def` (not the folder's
+  own `json`/`def`).
+- **Every class `$id`** is `.../<version>/XXX/json/<Class>` — the `XXX` segment
+  is injected before `json`.
+- **Validation:** the `XXX` taken from the filename must equal the `XXX` in the
+  file's own `$id` (its final path segment, `.../<version>/XXX-profile-source.yaml`).
+  A mismatch raises a `ValueError` (with a fix hint) during processing.
+- **Docs:** a profile is a standalone documentation unit — `y2t` renders only
+  that profile's import closure into `XXX/def`, so sibling profiles in the same
+  folder never cross-contaminate each other's docs.
+
+Non-profile sources are unaffected: their outputs and `$id`s continue to derive
+from the source's own location / `$id` (e.g. `va-core-source.yaml` at
+`va-spec/` emits to `va-spec/json` with `$id` `.../<version>/json/<Class>`).
 
 ---
 

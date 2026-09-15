@@ -337,8 +337,15 @@ def _folder_processors(proc: YamlSchemaProcessor) -> list:
     A folder's docs cover every ``*-source.yaml`` beside it (e.g. cat-vrs +
     recipes), so cross-references are computed over the whole folder.
     """
+    # A profile source (``XXX-profile-source.yaml``) is its own documentation
+    # unit: it has a distinct sub-namespace output dir, so it is never grouped
+    # with sibling sources (nor are profiles pulled into a non-profile's group).
+    if getattr(proc, "sub_namespace", None):
+        return [proc]
     procs = {proc.schema_fp.resolve(): proc}
     for src in sorted(proc.schema_fp.parent.glob("*-source.yaml")):
+        if src.name.endswith(YamlSchemaProcessor._PROFILE_SUFFIX):
+            continue
         key = src.resolve()
         if key not in procs:
             procs[key] = YamlSchemaProcessor(src)

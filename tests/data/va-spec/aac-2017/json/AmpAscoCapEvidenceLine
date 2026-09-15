@@ -6,20 +6,20 @@
    "maturity": "draft",
    "allOf": [
       {
-         "$ref": "/ga4gh/schema/va-spec/1.0.0-msp.test/base/json/EvidenceLine"
+         "$ref": "/ga4gh/schema/va-spec/1.0.0-msp.test/json/EvidenceLine"
       },
       {
          "properties": {
             "targetProposition": {
                "oneOf": [
                   {
-                     "$ref": "/ga4gh/schema/va-spec/1.0.0-msp.test/base/json/VariantPrognosticProposition"
+                     "$ref": "/ga4gh/schema/va-spec/1.0.0-msp.test/json/VariantPrognosticProposition"
                   },
                   {
-                     "$ref": "/ga4gh/schema/va-spec/1.0.0-msp.test/base/json/VariantDiagnosticProposition"
+                     "$ref": "/ga4gh/schema/va-spec/1.0.0-msp.test/json/VariantDiagnosticProposition"
                   },
                   {
-                     "$ref": "/ga4gh/schema/va-spec/1.0.0-msp.test/base/json/VariantTherapeuticResponseProposition"
+                     "$ref": "/ga4gh/schema/va-spec/1.0.0-msp.test/json/VariantTherapeuticResponseProposition"
                   }
                ]
             },

@@ -30,14 +30,15 @@ VRS = root / "data/vrs/vrs-source.yaml"
 CAT_VRS = root / "data/catvrs/cat-vrs-source.yaml"
 RECIPES = root / "data/catvrs/recipes-source.yaml"
 
-# va-spec: base/ holds two schemas that share one json/ + def/ output dir;
-# each profile lives in its own directory.
-DOMAIN_ENTITIES = root / "data/va-spec/base/domain-entities-source.yaml"
-VA_CORE = root / "data/va-spec/base/va-core-source.yaml"
+# va-spec is flat: all sources live at the va-spec/ top level. domain-entities +
+# va-core share one json/ + def/ output dir (va-spec/); each XXX-profile-source
+# writes into its own sub-namespace dir (va-spec/XXX/json + def).
+DOMAIN_ENTITIES = root / "data/va-spec/domain-entities-source.yaml"
+VA_CORE = root / "data/va-spec/va-core-source.yaml"
 VA_PROFILES = [
-    root / "data/va-spec/aac-2017/profile-source.yaml",
-    root / "data/va-spec/acmg-2015/profile-source.yaml",
-    root / "data/va-spec/ccv-2022/profile-source.yaml",
+    root / "data/va-spec/aac-2017-profile-source.yaml",
+    root / "data/va-spec/acmg-2015-profile-source.yaml",
+    root / "data/va-spec/ccv-2022-profile-source.yaml",
 ]
 VA_SPEC_ALL = [DOMAIN_ENTITIES, VA_CORE, *VA_PROFILES]
 
@@ -188,7 +189,7 @@ def test_va_spec_builds(src):
 
 
 def test_va_spec_base_outputs_generated():
-    """domain-entities and va-core share base/json and base/def; generate
+    """domain-entities and va-core share va-spec/json and va-spec/def; generate
     domain-entities first (clean), then va-core without wiping its docs."""
     de = YamlSchemaProcessor(DOMAIN_ENTITIES)
     _generate_outputs(de, clean=True)
@@ -203,12 +204,38 @@ def test_va_spec_base_outputs_generated():
     assert (de.def_fp / "Condition.rst").exists()
 
 
-@pytest.mark.parametrize("src", VA_PROFILES, ids=lambda p: p.parent.name)
+@pytest.mark.parametrize("src", VA_PROFILES, ids=lambda p: p.name.replace("-profile-source.yaml", ""))
 def test_va_spec_profile_outputs_generated(src):
     proc = YamlSchemaProcessor(src)
     _generate_outputs(proc)
     assert proc.json_fp.is_dir() and any(proc.json_fp.iterdir())
     assert proc.def_fp.is_dir() and any(proc.def_fp.iterdir())
+
+
+@pytest.mark.parametrize("src", VA_PROFILES, ids=lambda p: p.name.replace("-profile-source.yaml", ""))
+def test_profile_sub_namespace_routing(src):
+    """A ``XXX-profile-source.yaml`` routes its outputs and class $ids through the
+    ``XXX`` sub-namespace (``<parent>/XXX/{json,def}`` and ``.../XXX/json/<Class>``)."""
+    xxx = src.name.replace("-profile-source.yaml", "")
+    proc = YamlSchemaProcessor(src)
+    assert proc.sub_namespace == xxx
+    assert proc.json_fp == src.parent / xxx / "json"
+    assert proc.def_fp == src.parent / xxx / "def"
+    some_class = next(iter(proc.for_js["$defs"]))
+    assert f"/{xxx}/json/{some_class}" in proc.get_class_uri(some_class, "json")
+
+
+def test_profile_sub_namespace_mismatch_raises(tmp_path):
+    """If the filename's XXX and the $id's final segment disagree, raise."""
+    fp = tmp_path / "xyz-profile-source.yaml"
+    fp.write_text(
+        '$schema: "https://json-schema.org/draft/2020-12/schema"\n'
+        '$id: "https://w3id.org/ga4gh/schema/va-spec/1.0.0-msp.test/WRONG-profile-source.yaml"\n'
+        "title: X\n"
+        "$defs: {}\n"
+    )
+    with pytest.raises(ValueError, match="sub-namespace"):
+        YamlSchemaProcessor(fp)
 
 
 def test_same_name_override_merges_inherited_attributes():
