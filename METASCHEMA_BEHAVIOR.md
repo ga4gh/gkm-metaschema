@@ -279,11 +279,14 @@ from the source's own location / `$id` (e.g. `va-core-source.yaml` at
   [§6](#6-references)), but there's no holistic "shape of the source file"
   validation pass; adding one would need to enumerate the checks and decide how
   strict to be, not just patch one more case.
-- **Test scope.** Automated tests currently cover `gkm-core`, `vrs`, `cat-vrs`,
-  `recipes`, and the `va-spec` schemas (`domain-entities`, `va-core`, and the
-  `aac-2017` / `acmg-2015` / `ccv-2022` profiles). Other GKS source YAMLs are
-  excluded while the set is mid-migration; a few legacy tests are skipped for
-  removed fixtures.
+- **Test scope.** Automated tests cover every `*-source.yaml` currently in
+  this repo (`gkm-core`, `vrs`, `cat-vrs`, `recipes`, and the `va-spec`
+  schemas: `domain-entities`, `va-core`, and the `aac-2017` / `acmg-2015` /
+  `ccv-2022` profiles) — there are no excluded or skipped fixtures. These are
+  representative test fixtures for exercising the processor, though, not
+  necessarily the full, real schemas maintained in the corresponding GKS
+  product repos (va-spec, cat-vrs, etc.), which may be larger or drift as
+  those repos evolve independently of this one.
 
 ## Testing
 

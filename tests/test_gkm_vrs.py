@@ -1,11 +1,10 @@
 """Scoped tests for the metaschema processor.
 
-These tests exercise the migrated schema set: ``gkm-core-source.yaml``,
-``vrs-source.yaml`` (imports gkm-core), ``cat-vrs-source.yaml`` (imports
-gkm-core + vrs), ``recipes-source.yaml`` (imports cat-vrs), and the va-spec
-schemas under ``data/va-spec`` (base: domain-entities + va-core; profiles:
-aac-2017, acmg-2015, ccv-2022). Other source YAMLs are intentionally excluded
-for now while the set is mid-migration.
+These tests exercise every ``*-source.yaml`` in this repo's test fixtures:
+``gkm-core-source.yaml``, ``vrs-source.yaml`` (imports gkm-core),
+``cat-vrs-source.yaml`` (imports gkm-core + vrs), ``recipes-source.yaml``
+(imports cat-vrs), and the va-spec schemas under ``data/va-spec`` (base:
+domain-entities + va-core; profiles: aac-2017, acmg-2015, ccv-2022).
 
 They also lock in the removal of ``extends`` property renaming: subclasses
 specialize an inherited property by reusing its name (auto-merge, subclass
