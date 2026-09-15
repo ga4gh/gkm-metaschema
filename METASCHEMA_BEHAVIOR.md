@@ -202,12 +202,30 @@ Why the distinction matters:
     **concrete** GA4GH-identifiable classes only. Abstract classes omit it even
     when they carry/inherit a `ga4gh` block, since they are never instantiated —
     the digest applies to the concrete subclasses that inherit it.
-  - `y2t` is a **folder-level** build: it renders every class in a folder's
-    import closure (all `*-source.yaml` beside it plus their imports,
-    recursively) into that folder's `def/`, so the folder is self-contained and
-    its cross-reference lists are accurate *from that folder's perspective*. A
-    **profile source is the exception** — it is its own documentation unit (see
-    [§9](#9-profile-sub-namespaces)) and is never grouped with siblings.
+  - `y2t` renders a source's **full transitive import closure** (all
+    `*-source.yaml` beside it plus their imports, recursively — see
+    [`_folder_processors`](src/ga4gh/gkm/metaschema/scripts/y2t.py)), but splits
+    *where* each class lands: a source's **own** classes go into its own
+    `def/` (mirroring how `source2splitjs` only emits a source's own classes
+    into `json/`); every other class reached through the closure is rendered
+    into the shared **top-level** `def/` (a profile's `def/XXX`'s parent, or
+    `def/` itself for a non-profile source). Several sources in a folder can
+    pull the same imported class into their closure — each render is
+    identical regardless of which source triggers it, so this is a
+    deduplicated union, not per-source duplication. A **profile source is the
+    exception** for *rendering* scope — it never renders a sibling profile's
+    own classes (see [§9](#9-profile-sub-namespaces)).
+  - **Used in:**/**Subclasses:** cross-reference lists are computed over
+    **every** `*-source.yaml` in the folder — base sources *and* every
+    profile alike (see
+    [`_folder_xref_processors`](src/ga4gh/gkm/metaschema/scripts/y2t.py)) —
+    not just the closure of whichever source is currently rendering. This
+    matters for shared top-level `def/` files: several sources can each pull
+    in the same imported class and narrow/reference it differently, and
+    computing cross-references only from the current invocation's own closure
+    would make the file's xref list depend on which source's `y2t` run
+    happened to write it last. Computing them folder-wide instead makes every
+    render of a given class identical regardless of write order.
 
 Imports are only pulled in as dependencies; a schema's own `json/` artifacts are
 produced only when the scripts are run **on that schema's processor** (see the
@@ -220,16 +238,22 @@ A source file named **`XXX-profile-source.yaml`** contributes `XXX` as a
 (e.g. all of `va-spec/`) while each keeps a distinct output location and `$id`
 space:
 
-- **Outputs** go to `<parent>/XXX/json` and `<parent>/XXX/def` (not the folder's
-  own `json`/`def`).
-- **Every class `$id`** is `.../<version>/XXX/json/<Class>` — the `XXX` segment
-  is injected before `json`.
+- **Outputs** go to `<parent>/json/XXX` and `<parent>/def/XXX` — nested inside
+  the folder's shared `json`/`def` dirs, not as sibling top-level folders. A
+  folder's only direct children are ever `json/` and `def/`.
+- **Every class `$id`** is `.../<version>/json/XXX/<Class>` — the `XXX` segment
+  is injected after `json`.
 - **Validation:** the `XXX` taken from the filename must equal the `XXX` in the
   file's own `$id` (its final path segment, `.../<version>/XXX-profile-source.yaml`).
   A mismatch raises a `ValueError` (with a fix hint) during processing.
-- **Docs:** a profile is a standalone documentation unit — `y2t` renders only
-  that profile's import closure into `XXX/def`, so sibling profiles in the same
-  folder never cross-contaminate each other's docs.
+- **Docs:** a profile is a standalone unit for *rendering* — `y2t` renders that
+  profile's own classes into `def/XXX`, and every other class in its own
+  import closure into the shared top-level `def/`, so sibling profiles in the
+  same folder never end up with each other's classes in their `def/XXX`.
+  **Used in:**/**Subclasses:** cross-references, however, are computed across
+  every source in the folder (base sources and every profile together — see
+  [§8](#8-outputs)), so they stay complete on shared top-level `def/` files
+  that more than one profile references.
 
 Non-profile sources are unaffected: their outputs and `$id`s continue to derive
 from the source's own location / `$id` (e.g. `va-core-source.yaml` at

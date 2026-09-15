@@ -12,6 +12,7 @@ specialize an inherited property by reusing its name (auto-merge, subclass
 attributes win) and may no longer rename inherited properties.
 """
 
+import json
 import os
 import shutil
 from pathlib import Path
@@ -32,7 +33,8 @@ RECIPES = root / "data/catvrs/recipes-source.yaml"
 
 # va-spec is flat: all sources live at the va-spec/ top level. domain-entities +
 # va-core share one json/ + def/ output dir (va-spec/); each XXX-profile-source
-# writes into its own sub-namespace dir (va-spec/XXX/json + def).
+# writes into its own sub-namespace dir nested inside those (va-spec/json/XXX +
+# va-spec/def/XXX), so va-spec/ itself only ever has json/ and def/ children.
 DOMAIN_ENTITIES = root / "data/va-spec/domain-entities-source.yaml"
 VA_CORE = root / "data/va-spec/va-core-source.yaml"
 VA_PROFILES = [
@@ -215,14 +217,62 @@ def test_va_spec_profile_outputs_generated(src):
 @pytest.mark.parametrize("src", VA_PROFILES, ids=lambda p: p.name.replace("-profile-source.yaml", ""))
 def test_profile_sub_namespace_routing(src):
     """A ``XXX-profile-source.yaml`` routes its outputs and class $ids through the
-    ``XXX`` sub-namespace (``<parent>/XXX/{json,def}`` and ``.../XXX/json/<Class>``)."""
+    ``XXX`` sub-namespace, nested inside the shared ``json``/``def`` dirs
+    (``<parent>/{json,def}/XXX`` and ``.../json/XXX/<Class>``)."""
     xxx = src.name.replace("-profile-source.yaml", "")
     proc = YamlSchemaProcessor(src)
     assert proc.sub_namespace == xxx
-    assert proc.json_fp == src.parent / xxx / "json"
-    assert proc.def_fp == src.parent / xxx / "def"
+    assert proc.json_fp == src.parent / "json" / xxx
+    assert proc.def_fp == src.parent / "def" / xxx
     some_class = next(iter(proc.for_js["$defs"]))
-    assert f"/{xxx}/json/{some_class}" in proc.get_class_uri(some_class, "json")
+    assert f"/json/{xxx}/{some_class}" in proc.get_class_uri(some_class, "json")
+
+
+def test_profile_ref_to_base_class_omits_sub_namespace(tmp_path):
+    """A profile class's $ref to a class owned by a non-profile source (e.g.
+    va-core's EvidenceLine) must resolve to that source's own path, with no
+    sub-namespace segment injected -- the sub-namespace belongs to the
+    referencing profile, not to a class the profile doesn't own."""
+    proc = YamlSchemaProcessor(root / "data/va-spec/aac-2017-profile-source.yaml")
+    split_defs_to_js(proc)
+    amp = json.loads((proc.json_fp / "AmpAscoCapEvidenceLine").read_text())
+    evidence_line_ref = amp["allOf"][0]["$ref"]
+    assert evidence_line_ref.endswith("/json/EvidenceLine")
+    assert "/aac-2017/" not in evidence_line_ref
+
+
+def test_profile_ref_to_sibling_class_includes_sub_namespace(tmp_path):
+    """A profile class's $ref to another class defined in the *same* profile
+    source must include the profile's own sub-namespace segment, matching how
+    that sibling class's own json/ output is routed."""
+    schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://example.org/schema/xxxprof/1.0.0/xxxprof-profile-source.yaml",
+        "title": "XxxProf",
+        "type": "object",
+        "$defs": {
+            "First": {
+                "maturity": "draft",
+                "description": "first",
+                "type": "object",
+                "properties": {"second": {"$ref": "#/$defs/Second"}},
+            },
+            "Second": {
+                "maturity": "draft",
+                "description": "second",
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+            },
+        },
+    }
+    fp = tmp_path / "xxxprof-profile-source.yaml"
+    with open(fp, "w") as f:
+        yaml.safe_dump(schema, f)
+    proc = YamlSchemaProcessor(fp)
+    split_defs_to_js(proc)
+    first = json.loads((proc.json_fp / "First").read_text())
+    second_ref = first["properties"]["second"]["$ref"]
+    assert second_ref.endswith("/json/xxxprof/Second")
 
 
 def test_profile_sub_namespace_mismatch_raises(tmp_path):

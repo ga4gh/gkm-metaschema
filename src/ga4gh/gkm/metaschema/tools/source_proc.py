@@ -38,15 +38,20 @@ class YamlSchemaProcessor:
         self.json_key = self.raw_schema.get("json-target", "json")
         self.defs_key = self.raw_schema.get("def-target", "def")
         # A ``XXX-profile-source.yaml`` file contributes ``XXX`` as a sub-namespace:
-        # its outputs live under ``<parent>/XXX/{json,def}`` and every class $id
-        # is ``.../<version>/XXX/json/<Class>``. XXX is taken from the filename and
+        # its outputs live under ``<parent>/{yaml,json,def}/XXX`` (nested inside the
+        # shared output dirs, not as sibling top-level folders) and every class $id
+        # is ``.../<version>/json/XXX/<Class>``. XXX is taken from the filename and
         # must match the $id's final path segment.
         self.sub_namespace = self._profile_sub_namespace()
-        out_base = self.schema_fp.parent / self.sub_namespace if self.sub_namespace else self.schema_fp.parent
+        parent = self.schema_fp.parent
         # schema_root_name = str(self.schema_fp.stem)[:-7]  # removes "-source"
-        self.yaml_fp = out_base / self.yaml_key
-        self.json_fp = out_base / self.json_key
-        self.def_fp = out_base / self.defs_key
+
+        def _out_fp(key):
+            return parent / key / self.sub_namespace if self.sub_namespace else parent / key
+
+        self.yaml_fp = _out_fp(self.yaml_key)
+        self.json_fp = _out_fp(self.json_key)
+        self.def_fp = _out_fp(self.defs_key)
         # self.def_fp = self.schema_fp.parent / self.raw_schema.get('def-target', f'def/{schema_root_name}')
         self.namespaces = self.raw_schema.get("namespaces", [])
         self.schema_def_keyword = SCHEMA_DEF_KEYWORD_BY_VERSION[self.raw_schema["$schema"]]
@@ -403,11 +408,12 @@ class YamlSchemaProcessor:
         parsed_url = urlparse(self.id)
         parsed_id_path = parsed_url.path
         base = Path(parsed_id_path).parent
-        # Profile sources inject their sub-namespace before the export key so
-        # class $ids read ``.../<version>/XXX/json/<Class>``.
+        # Profile sources inject their sub-namespace after the export key so
+        # class $ids read ``.../<version>/json/XXX/<Class>``.
         if self.sub_namespace:
-            base = base.joinpath(self.sub_namespace)
-        revised_path = base.joinpath(export_key, class_ref)
+            revised_path = base.joinpath(export_key, self.sub_namespace, class_ref)
+        else:
+            revised_path = base.joinpath(export_key, class_ref)
         return str(revised_path)
 
     def process_schema_class(self, schema_class):

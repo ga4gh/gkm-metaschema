@@ -11,13 +11,11 @@ vpath %.classes $(BUILD_DIR)
 
 # va-spec is flat: every source lives here. The MSP tools place each class's
 # json/def in the right dir on their own — base sources (va-core,
-# domain-entities) -> ./json + ./def; each XXX-profile-source.yaml -> XXX/json +
-# XXX/def -- so this one Makefile drives all of it (no per-subdirectory Makefiles).
+# domain-entities) -> ./json + ./def; each XXX-profile-source.yaml -> ./json/XXX +
+# ./def/XXX -- so this one Makefile drives all of it (no per-subdirectory Makefiles).
 SOURCES := $(wildcard *-source.yaml)
 TAGS := $(SOURCES:-source.yaml=.tag)
 IMPORTS := $(wildcard $(IMPORT_DIR)/*-source.yaml)
-# Sub-namespace output dirs, one per XXX-profile-source.yaml.
-PROFILE_NS := $(patsubst %-profile-source.yaml,%,$(wildcard *-profile-source.yaml))
 
 all: build-ordered ${TAGS} prune-tag
 
@@ -45,4 +43,4 @@ prune-tag: ${TAGS}
 	touch $(BUILD_DIR)/$@
 
 clean:
-	rm -rf $(BUILD_DIR) $(DEF_DIR) $(JSON_DIR) $(PROFILE_NS)
+	rm -rf $(BUILD_DIR) $(DEF_DIR) $(JSON_DIR)
