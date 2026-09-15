@@ -457,15 +457,21 @@ def test_property_order_is_superclass_first():
 
 def test_abstract_classes_are_emitted_as_object_schemas():
     """Every class, abstract included, is emitted with type: object and no
-    metaschema-only keywords (`abstract`, `inherits`) leaking into output."""
+    `inherits` leaking into output. Abstract classes carry `abstract: true`
+    so a consumer of the per-class JSON can tell them apart from concrete
+    classes without cross-referencing the source YAML; concrete classes omit
+    the key entirely rather than carrying `abstract: false`."""
     proc = YamlSchemaProcessor(VRS)
     defs = proc.for_js["$defs"]
     for abstract_cls in ("Ga4ghIdentifiableObject", "Variation", "Location"):
         assert abstract_cls in defs, f"{abstract_cls} should be emitted"
         emitted = defs[abstract_cls]
         assert emitted.get("type") == "object"
-        assert "abstract" not in emitted
+        assert emitted.get("abstract") is True
         assert "inherits" not in emitted
+
+    concrete = defs["Allele"]
+    assert "abstract" not in concrete
 
 
 def test_ref_to_abstract_class_stays_direct():

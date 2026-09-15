@@ -3,6 +3,7 @@
    "$id": "https://w3id.org/ga4gh/schema/cat-vrs/1.0.0-msp.test/json/CategoricalVariant",
    "title": "CategoricalVariant",
    "type": "object",
+   "abstract": true,
    "maturity": "trial use",
    "description": "A representation of a categorically-defined domain for variation, in which individual Constraintual variation instances may be members of the domain.",
    "properties": {
