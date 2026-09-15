@@ -272,6 +272,47 @@ Non-profile sources are unaffected: their outputs and `$id`s continue to derive
 from the source's own location / `$id` (e.g. `va-core-source.yaml` at
 `va-spec/` emits to `va-spec/json` with `$id` `.../<version>/json/<Class>`).
 
+## 10. Sealed abstract classes (`sealed`)
+
+By default, a `$ref`/`$refCurie` to an **abstract** class stays a direct
+`$ref` — it validates *any* structurally-conforming subclass instance,
+including ones the schema doesn't know about yet (see [§6](#6-references)).
+That's the right default for an extensible type: it doesn't foreclose
+downstream schemas defining new subclasses. Some abstract classes, though,
+really do represent a **closed, fully-known set of subtypes** — every
+subclass that will ever exist is already declared in the same file, and a
+reference site should be restricted to exactly that set. `sealed: true` opts
+a class into that narrower contract:
+
+- **Only meaningful on an `abstract` class.** Setting `sealed: true` on a
+  concrete class raises a `ValueError`.
+- **Auto-derives a `oneOf`** from the class's own subclass tree (`inherits:`,
+  resolved transitively, same-source only — a cross-source `inherits:
+  namespace:Class` isn't counted, matching [§2](#2-inheritance-inherits)'s
+  general rule). Only **concrete** descendants are listed; an abstract
+  intermediate is skipped in favor of its own concrete descendants, since an
+  abstract member's open contract would let a value double-match under
+  `oneOf`'s "exactly one" requirement. A sealed class with **zero** concrete
+  descendants raises — an empty `oneOf` can never be satisfied.
+- **Mutually exclusive with a hand-authored `oneOf`/`anyOf`/`allOf`** on the
+  same class — combining an auto-derived union with a manual one is
+  ambiguous, and raises.
+- **Materialized before any other processing runs**, so a sealed class is
+  indistinguishable from a hand-authored container class (one that declares
+  its own `oneOf`/`anyOf`/`allOf` directly) to everything downstream:
+  `class_is_container`, the split per-class `json/` output, and `y2t`'s RST
+  rendering (which renders the closed union as a "must match one of the
+  following" list, alongside the class's own property table and
+  **Subclasses:** cross-references) all just work, unchanged.
+- **`sealed` itself is stripped** from the emitted JSON Schema once
+  materialized into `oneOf` — like the other metaschema-only keywords, it
+  carries no further information for a consumer of the output.
+
+Sealing a class is a **non-breaking, purely additive** change from the
+perspective of anything that references it: every existing `$ref`/`$refCurie`
+pointing at the sealed class keeps working exactly as written — only the
+sealed class's *own* emitted schema gains the `oneOf`.
+
 ---
 
 ## Known limitations
@@ -359,3 +400,10 @@ Behaviors intentionally **removed / changed** during the migration:
   stripped behavior — `class_is_abstract()` and everything built on it read
   the flag from the raw source schema, not from `for_js` — so this only
   changes what a consumer of the per-class JSON can observe.
+- **`sealed` reintroduces, as an opt-in, the concretize-to-`oneOf` behavior**
+  the "Abstract classes were previously pruned... or collapsed into a `oneOf`
+  union" note above describes being removed. The old behavior applied
+  unconditionally to every abstract class's *reference sites*; `sealed` is
+  the opposite shape — a per-class opt-in that changes only the sealed
+  class's *own* emitted schema (every existing `$ref` to it keeps working
+  unchanged) — see [§10](#10-sealed-abstract-classes-sealed).
