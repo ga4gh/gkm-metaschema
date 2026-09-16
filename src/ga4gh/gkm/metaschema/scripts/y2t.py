@@ -297,6 +297,204 @@ def flatten_allof(class_definition: dict, proc: YamlSchemaProcessor):
     return effective, sorted(required)
 
 
+def _describe_schema_paths(attribs: dict, path: list) -> list:
+    """Recursively walk a JSON-Schema-shaped dict (an allOf `if` condition,
+    or a `then`/`else` consequence) to describe every leaf constraint it
+    pins down.
+
+    Yields ``(dotted.path, kind, description)`` triples: ``kind`` is
+    ``"value"`` for a ``const``/``enum``/``pattern``/bounds/boolean-schema pin
+    (rendered "must be") or ``"type"`` for a structural narrowing resolved via
+    ``resolve_type`` (rendered "is narrowed to"). A property with its own
+    nested ``properties`` recurses, extending the dotted path -- e.g.
+    ``strength: {properties: {primaryCoding: {properties: {code:
+    {const: strong}}}}}`` yields a single ``strength.primaryCoding.code``
+    leaf, not a bare ``strength`` entry. A property schema'd as the JSON
+    Schema boolean ``false`` (e.g. ``strength: false``, meaning "this
+    property must not be present") is described rather than recursed into,
+    since it has no ``properties`` of its own to walk.
+    """
+    results = []
+    for name, member in attribs.get("properties", {}).items():
+        new_path = path + [name]
+        dotted = ".".join(new_path)
+        if isinstance(member, bool):
+            desc = "is not permitted" if member is False else "is permitted with any value"
+            results.append((dotted, "raw", desc))
+        elif "const" in member:
+            results.append((dotted, "value", f"``{member['const']}``"))
+        elif "enum" in member:
+            values = ", ".join(f"``{v}``" for v in member["enum"])
+            results.append((dotted, "value", f"one of: {values}"))
+        elif "pattern" in member:
+            results.append((dotted, "raw", f"must match the pattern ``{member['pattern']}``"))
+        elif "properties" in member:
+            results.extend(_describe_schema_paths(member, new_path))
+        else:
+            resolved = resolve_type(member)
+            kind = "type"
+            if resolved == "_Not Specified_":
+                # resolve_type only recognizes type/$ref/$refCurie/allOf/
+                # oneOf/anyOf -- describe whatever bound-style constraint
+                # keywords *are* present instead of leaking its internal
+                # "not specified" sentinel into rendered docs.
+                kind = "value"
+                resolved = _describe_bounds(member) or "further constrained (see source)"
+            results.append((dotted, kind, resolved))
+    return results
+
+
+def _describe_bounds(member: dict) -> str:
+    """Describe numeric/length/format constraint keywords resolve_type
+    doesn't understand (it only recognizes type/$ref/$refCurie/allOf/oneOf/
+    anyOf), joined into one clause. Empty string if none are present."""
+    parts = []
+    for key in ("minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "minLength", "maxLength"):
+        if key in member:
+            parts.append(f"{key}: ``{member[key]}``")
+    if "format" in member:
+        parts.append(f"format: ``{member['format']}``")
+    return "; ".join(parts)
+
+
+def _condition_leaf(if_schema: dict) -> tuple | None:
+    """If ``if_schema`` pins down exactly one property to a concrete value
+    (``const``/``enum``/a bounds-style keyword), return ``(dotted.path,
+    value_description)``. Returns None for anything that doesn't reduce to
+    that single "property equals value" shape -- a compound (multi-property)
+    condition, or one resolved via ``resolve_type``/a pattern/boolean-schema
+    pin -- which reads more naturally as prose than as a table row.
+    """
+    leaves = _describe_schema_paths(if_schema, [])
+    if len(leaves) != 1:
+        return None
+    path, kind, desc = leaves[0]
+    if kind != "value":
+        return None
+    return path, desc
+
+
+def _must_phrase(kind: str, desc: str) -> str:
+    """Render a then/else leaf's (kind, description) as the verb phrase for
+    the **must...** table column, e.g. "have value ``X``", "match the
+    pattern ``Y``", "not be provided"."""
+    if kind == "raw":
+        if desc == "is not permitted":
+            return "not be provided"
+        if desc == "is permitted with any value":
+            return "be provided, with any value"
+        # e.g. "must match the pattern ``X``" -> "match the pattern ``X``"
+        return desc.removeprefix("must ")
+    if kind == "value":
+        return f"have value {desc}" if desc.startswith("``") else f"have {desc}"
+    # kind == "type": a structural narrowing resolved via resolve_type.
+    if " | " in desc:
+        return f"be one of: {desc.replace(' | ', ', ')}"
+    return f"be narrowed to: {desc}"
+
+
+def _consequence_rows(branch: dict) -> list:
+    """Table rows -- (dotted.path, must_phrase) -- for a then/else branch:
+    one per leaf constraint, plus one per ``required`` entry that has no
+    constraint of its own (bare presence, e.g. ``required: [strength]`` with
+    no narrowing on ``strength`` itself)."""
+    rows = []
+    leaves = _describe_schema_paths(branch, [])
+    covered = [path for path, _kind, _desc in leaves]
+    for path, kind, desc in leaves:
+        rows.append((path, _must_phrase(kind, desc)))
+    for name in branch.get("required", []):
+        if not any(p == name or p.startswith(name + ".") for p in covered):
+            rows.append((name, "be provided"))
+    return rows
+
+
+def _render_conditional_prose(f, member: dict) -> None:
+    """Render one allOf `if`/`then`/`else` member as prose bullets -- the
+    general fallback for a condition/consequence shape that doesn't reduce
+    to a single "property equals value" table row (see _condition_leaf)."""
+    condition = _describe_schema_paths(member["if"], [])
+    cond_text = " and ".join(f"``{p}`` {d}" if k == "raw" else f"``{p}`` is {d}" for p, k, d in condition)
+    print(f"If {cond_text or 'the condition below holds'}, then:\n", file=f)
+    for branch_key, lede in (("then", None), ("else", "Otherwise")):
+        branch = member.get(branch_key)
+        if not branch:
+            continue
+        if lede:
+            print(f"\n{lede}:\n", file=f)
+        for path, kind, desc in _describe_schema_paths(branch, []):
+            if kind == "raw":
+                # desc is a complete, self-contained clause (its own verb).
+                print(f"* ``{path}`` {desc}", file=f)
+                continue
+            verb = "must be" if kind == "value" else "is narrowed to"
+            print(f"* ``{path}`` {verb}: {desc}", file=f)
+        if branch.get("required"):
+            req = ", ".join(f"``{r}``" for r in branch["required"])
+            print(f"* Required: {req}", file=f)
+    print(file=f)
+
+
+def render_conditional_constraints(f, class_definition: dict) -> None:
+    """Render allOf `if`/`then`/`else` members -- business-rule-style
+    conditional narrowing (e.g. AMP/ASCO/CAP tier-dependent constraints) --
+    under a **Conditional Constraints** heading.
+
+    `flatten_allof` only understands a base `$ref` or a flat `properties`
+    member; an `if`/`then` member has neither at its own top level (the
+    condition/consequence properties are nested one level deeper), so it's
+    silently skipped by the main Information Model table. Without this,
+    conditional rules were entirely invisible in the rendered docs.
+
+    A member whose condition reduces to a single "property equals value" pin
+    (the common case -- e.g. AMP/ASCO/CAP's tier-/methodType-keyed rules) is
+    collected into one **If property... / has value... / then property... /
+    must...** table, one row per consequence -- flatter and easier to scan
+    than prose when a class has many such branches. Anything that doesn't
+    reduce that way (a compound condition, an `else`, or a condition pinned
+    via a structural/pattern/boolean-schema constraint rather than a plain
+    value) falls back to the previous prose rendering.
+    """
+    branches = [m for m in class_definition.get("allOf", []) if "if" in m]
+    if not branches:
+        return
+    table_rows = []
+    prose_members = []
+    for member in branches:
+        leaf = None if "else" in member else _condition_leaf(member["if"])
+        rows = _consequence_rows(member.get("then", {})) if leaf else []
+        if leaf is None or not rows:
+            prose_members.append(member)
+            continue
+        if_path, has_value = leaf
+        table_rows.extend((if_path, has_value, then_path, must) for then_path, must in rows)
+    print("\n**Conditional Constraints**\n", file=f)
+    if table_rows:
+        print(
+            """.. list-table::
+   :class: clean-wrap
+   :header-rows: 1
+   :align: left
+   :widths: auto
+
+   *  - If property...
+      - has value...
+      - then property...
+      - must...""",
+            file=f,
+        )
+        for if_path, has_value, then_path, must in table_rows:
+            row = f"""\
+   *  - ``{if_path}``
+      - {has_value}
+      - ``{then_path}``
+      - {must}"""
+            print(row, file=f)
+        print(file=f)
+    for member in prose_members:
+        _render_conditional_prose(f, member)
+
+
 def render_information_model(f, properties: dict, required: list, note: str = "") -> None:
     """Render an Information Model list-table for a property set.
 
@@ -457,15 +655,24 @@ def build_cross_references(owners: dict):
 
 
 def _print_xrefs(f, proc: YamlSchemaProcessor, class_name: str, used_in: dict, subclasses: dict) -> None:
-    """Append 'Inherits:', 'Subclasses:', and 'Used in:' :ref: lists for a
-    class. 'Inherits:' shows the class's own direct 'inherits' target (if
-    any) -- the mirror of 'Subclasses:', which shows its direct children --
-    so it's printed immediately above it, regardless of the class's shape
-    (passthrough, primitive, or a normal properties/composition class all
-    call this)."""
+    """Append 'Inherits:', 'Composes:', 'Subclasses:', and 'Used in:' :ref:
+    lists for a class. 'Inherits:' shows the class's own direct 'inherits'
+    target (if any); 'Composes:' is the allOf-composition equivalent -- the
+    base class(es) an allOf-composed class builds on via $ref/$refCurie,
+    which 'inherits:' doesn't capture since composition is a separate
+    mechanism (see flatten_allof). Both precede 'Subclasses:' (the mirror --
+    a class's direct children), regardless of the class's shape (passthrough,
+    primitive, or a normal properties/composition class all call this)."""
     inherits = proc.raw_defs[class_name].get("inherits")
     if isinstance(inherits, str):
         print("\n**Inherits:** :ref:`" + _ref_label(inherits) + "`", file=f)
+    composes = []
+    for member in proc.raw_defs[class_name].get("allOf", []):
+        base_name = _ref_class_name(member)
+        if base_name and base_name not in composes:
+            composes.append(base_name)
+    if composes:
+        print("\n**Composes:** " + ", ".join(f":ref:`{c}`" for c in composes), file=f)
     subs = sorted(subclasses.get(class_name, []))
     if subs:
         print("\n**Subclasses:** " + ", ".join(f":ref:`{s}`" for s in subs), file=f)
@@ -550,6 +757,7 @@ def render_class(
                     print("\n" + composition, file=f)
         elif p is not None:
             render_information_model(f, class_definition[p], class_definition.get("required", []), inheritance)
+        render_conditional_constraints(f, class_definition)
         composition = resolve_composition(class_definition)
         if composition:
             print("\n" + composition, file=f)
