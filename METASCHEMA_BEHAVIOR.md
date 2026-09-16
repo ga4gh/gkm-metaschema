@@ -206,8 +206,13 @@ Why the distinction matters:
   - **`allOf`-composed** classes (recipes/profiles) render a **flattened
     effective-property table**: the base class's properties overlaid with the
     subclass's local properties, showing each property's effective (**narrowed**)
-    type (e.g. a `contains` constraint's specific member type). `oneOf`/`anyOf`
-    unions render a "one of / any of the following" summary.
+    type (e.g. a `contains` constraint's specific member type). A referenced
+    base that is itself `allOf`-composed (a two-level composition chain, e.g.
+    a profile class composing another profile class rather than a plain
+    entity) is flattened **recursively**, so its own composed properties (and
+    its base's, transitively) are picked up too — not silently dropped, which
+    a single-level lookup would do. `oneOf`/`anyOf` unions render a "one of /
+    any of the following" summary.
   - Each class table is followed by **Inherits:** (the class's own direct
     `inherits` target, if any — a cross-schema `namespace:Class` value
     resolves to the bare class name), **Composes:** (an `allOf`-composed
@@ -489,3 +494,13 @@ Behaviors intentionally **removed / changed** during the migration:
   docs (e.g. every CCV/ACMG `methodType`-keyed branch on
   `VariantOncogenicityEvidenceLine`/`VariantPathogenicityEvidenceLine`) —
   fixed by `_describe_bounds`.
+- `flatten_allof` (the RST **Information Model** table for `allOf`-composed
+  classes) now **recurses** into a referenced base that is itself
+  `allOf`-composed, rather than reading only its top-level `properties`. A
+  two-level composition chain — a profile class composing another profile
+  class rather than a plain entity, e.g. `aac-2017`'s
+  `DiagnosticEvidenceLine`/`PrognosticEvidenceLine`/`TherapeuticEvidenceLine`
+  each composing `AmpAscoCapEvidenceLine` (itself composed from
+  `va.core:EvidenceLine`) — previously rendered a table with only the
+  subclass's own locally-added property, silently dropping everything the
+  intermediate base itself composed in.

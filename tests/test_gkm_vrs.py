@@ -23,6 +23,7 @@ import yaml
 
 from ga4gh.gkm.metaschema.scripts.source2splitjs import split_defs_to_js
 from ga4gh.gkm.metaschema.scripts.y2t import build_cross_references
+from ga4gh.gkm.metaschema.scripts.y2t import flatten_allof
 from ga4gh.gkm.metaschema.scripts.y2t import main as y2t
 from ga4gh.gkm.metaschema.scripts.y2t import render_class
 from ga4gh.gkm.metaschema.tools.source_proc import YamlSchemaProcessor
@@ -322,6 +323,34 @@ def test_used_in_omits_transitive_subclass_enumeration_mirror(vrs_processor):
     # the direct relationship is unaffected: MolecularVariation's own
     # Subclasses: still correctly lists Allele.
     assert "Allele" in subclasses.get("MolecularVariation", set())
+
+
+def test_flatten_allof_recurses_through_composed_base(tmp_path):
+    """flatten_allof only read a referenced base's top-level `properties` --
+    a single level. DiagnosticEvidenceLine's allOf base, AmpAscoCapEvidenceLine,
+    is itself allOf-composed (no flat top-level `properties` of its own; its
+    shape comes from composing va.core:EvidenceLine plus local narrowing), so
+    the old single-level lookup silently dropped every property
+    AmpAscoCapEvidenceLine contributes -- the flattened table showed only
+    DiagnosticEvidenceLine's own locally-added `targetProposition`, missing
+    the 12 properties composed in from EvidenceLine plus AmpAscoCapEvidenceLine's
+    own strengthOfEvidenceProvided.
+    """
+    proc = YamlSchemaProcessor(root / "data/va-spec/aac-2017-profile-source.yaml")
+    class_def = proc.processed_schema[proc.schema_def_keyword]["DiagnosticEvidenceLine"]
+    effective, required = flatten_allof(class_def, proc)
+    assert "targetProposition" in effective  # DiagnosticEvidenceLine's own narrowing
+    # properties composed into AmpAscoCapEvidenceLine's own allOf, from both
+    # va.core:EvidenceLine (transitively) and AmpAscoCapEvidenceLine itself.
+    assert "id" in effective
+    assert "specifiedBy" in effective
+    assert "strengthOfEvidenceProvided" in effective
+    assert "targetProposition" in required
+
+    rst = _render_one(proc, "DiagnosticEvidenceLine", tmp_path)
+    assert "**Information Model**" in rst
+    assert "specifiedBy" in rst
+    assert "strengthOfEvidenceProvided" in rst
 
 
 def _generate_outputs(proc, clean=True):

@@ -268,24 +268,34 @@ def _merge_property(base: dict, refinement: dict) -> dict:
     return merged
 
 
-def flatten_allof(class_definition: dict, proc: YamlSchemaProcessor):
+def flatten_allof(class_definition: dict, proc: YamlSchemaProcessor, _seen: frozenset = frozenset()):
     """Flatten an allOf-composed class to its effective property set.
 
     Overlays each referenced base class's properties (in order) with the local
     ``properties``. Returns (effective_properties, sorted_required). Local/added
     names win but keep the position they hold in the base (superclass-first
     ordering).
+
+    A referenced base that is itself allOf-composed (has no flat top-level
+    ``properties`` of its own -- e.g. a recipe/profile class composing another
+    recipe/profile class, rather than a plain entity) is flattened recursively,
+    so its own composed properties (and its base's, transitively) are picked up
+    too, not silently dropped. ``_seen`` guards against a cyclic ``allOf`` chain.
     """
     registry = _class_registry(proc)
     effective: dict = {}
     required: set = set()
     for member in class_definition.get("allOf", []):
         base_name = _ref_class_name(member)
-        if base_name and base_name in registry:
+        if base_name and base_name in registry and base_name not in _seen:
             base = registry[base_name]
-            for name, attribs in base.get("properties", {}).items():
+            if "allOf" in base:
+                base_effective, base_required = flatten_allof(base, proc, _seen | {base_name})
+            else:
+                base_effective, base_required = base.get("properties", {}), base.get("required", [])
+            for name, attribs in base_effective.items():
                 effective.setdefault(name, attribs)
-            required.update(base.get("required", []))
+            required.update(base_required)
         if "properties" in member:
             for name, attribs in member["properties"].items():
                 effective[name] = _merge_property(effective.get(name, {}), attribs)
