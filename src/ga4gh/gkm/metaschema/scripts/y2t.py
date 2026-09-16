@@ -297,6 +297,78 @@ def flatten_allof(class_definition: dict, proc: YamlSchemaProcessor):
     return effective, sorted(required)
 
 
+def _describe_schema_paths(attribs: dict, path: list) -> list:
+    """Recursively walk a JSON-Schema-shaped dict (an allOf `if` condition,
+    or a `then`/`else` consequence) to describe every leaf constraint it
+    pins down.
+
+    Yields ``(dotted.path, kind, description)`` triples: ``kind`` is
+    ``"value"`` for a ``const``/``enum``/boolean-schema pin (rendered "must
+    be") or ``"type"`` for a structural narrowing resolved via
+    ``resolve_type`` (rendered "is narrowed to"). A property with its own
+    nested ``properties`` recurses, extending the dotted path -- e.g.
+    ``strength: {properties: {primaryCoding: {properties: {code:
+    {const: strong}}}}}`` yields a single ``strength.primaryCoding.code``
+    leaf, not a bare ``strength`` entry. A property schema'd as the JSON
+    Schema boolean ``false`` (e.g. ``strength: false``, meaning "this
+    property must not be present") is described rather than recursed into,
+    since it has no ``properties`` of its own to walk.
+    """
+    results = []
+    for name, member in attribs.get("properties", {}).items():
+        new_path = path + [name]
+        if isinstance(member, bool):
+            desc = "not permitted" if member is False else "permitted with any value"
+            results.append((".".join(new_path), "raw", desc))
+        elif "const" in member:
+            results.append((".".join(new_path), "value", f"``{member['const']}``"))
+        elif "enum" in member:
+            values = ", ".join(f"``{v}``" for v in member["enum"])
+            results.append((".".join(new_path), "value", f"one of: {values}"))
+        elif "properties" in member:
+            results.extend(_describe_schema_paths(member, new_path))
+        else:
+            results.append((".".join(new_path), "type", resolve_type(member)))
+    return results
+
+
+def render_conditional_constraints(f, class_definition: dict) -> None:
+    """Render allOf `if`/`then`/`else` members -- business-rule-style
+    conditional narrowing (e.g. AMP/ASCO/CAP tier-dependent constraints) --
+    as prose bullets under a **Conditional Constraints** heading.
+
+    `flatten_allof` only understands a base `$ref` or a flat `properties`
+    member; an `if`/`then` member has neither at its own top level (the
+    condition/consequence properties are nested one level deeper), so it's
+    silently skipped by the main Information Model table. Without this,
+    conditional rules were entirely invisible in the rendered docs.
+    """
+    branches = [m for m in class_definition.get("allOf", []) if "if" in m]
+    if not branches:
+        return
+    print("\n**Conditional Constraints**\n", file=f)
+    for member in branches:
+        condition = _describe_schema_paths(member["if"], [])
+        cond_text = " and ".join(f"``{p}`` is {d}" for p, _kind, d in condition)
+        print(f"If {cond_text or 'the condition below holds'}, then:\n", file=f)
+        for branch_key, lede in (("then", None), ("else", "Otherwise")):
+            branch = member.get(branch_key)
+            if not branch:
+                continue
+            if lede:
+                print(f"\n{lede}:\n", file=f)
+            for path, kind, desc in _describe_schema_paths(branch, []):
+                if kind == "raw":
+                    print(f"* ``{path}`` is {desc}", file=f)
+                    continue
+                verb = "must be" if kind == "value" else "is narrowed to"
+                print(f"* ``{path}`` {verb}: {desc}", file=f)
+            if branch.get("required"):
+                req = ", ".join(f"``{r}``" for r in branch["required"])
+                print(f"* Required: {req}", file=f)
+        print(file=f)
+
+
 def render_information_model(f, properties: dict, required: list, note: str = "") -> None:
     """Render an Information Model list-table for a property set.
 
@@ -457,15 +529,24 @@ def build_cross_references(owners: dict):
 
 
 def _print_xrefs(f, proc: YamlSchemaProcessor, class_name: str, used_in: dict, subclasses: dict) -> None:
-    """Append 'Inherits:', 'Subclasses:', and 'Used in:' :ref: lists for a
-    class. 'Inherits:' shows the class's own direct 'inherits' target (if
-    any) -- the mirror of 'Subclasses:', which shows its direct children --
-    so it's printed immediately above it, regardless of the class's shape
-    (passthrough, primitive, or a normal properties/composition class all
-    call this)."""
+    """Append 'Inherits:', 'Composes:', 'Subclasses:', and 'Used in:' :ref:
+    lists for a class. 'Inherits:' shows the class's own direct 'inherits'
+    target (if any); 'Composes:' is the allOf-composition equivalent -- the
+    base class(es) an allOf-composed class builds on via $ref/$refCurie,
+    which 'inherits:' doesn't capture since composition is a separate
+    mechanism (see flatten_allof). Both precede 'Subclasses:' (the mirror --
+    a class's direct children), regardless of the class's shape (passthrough,
+    primitive, or a normal properties/composition class all call this)."""
     inherits = proc.raw_defs[class_name].get("inherits")
     if isinstance(inherits, str):
         print("\n**Inherits:** :ref:`" + _ref_label(inherits) + "`", file=f)
+    composes = []
+    for member in proc.raw_defs[class_name].get("allOf", []):
+        base_name = _ref_class_name(member)
+        if base_name and base_name not in composes:
+            composes.append(base_name)
+    if composes:
+        print("\n**Composes:** " + ", ".join(f":ref:`{c}`" for c in composes), file=f)
     subs = sorted(subclasses.get(class_name, []))
     if subs:
         print("\n**Subclasses:** " + ", ".join(f":ref:`{s}`" for s in subs), file=f)
@@ -550,6 +631,7 @@ def render_class(
                     print("\n" + composition, file=f)
         elif p is not None:
             render_information_model(f, class_definition[p], class_definition.get("required", []), inheritance)
+        render_conditional_constraints(f, class_definition)
         composition = resolve_composition(class_definition)
         if composition:
             print("\n" + composition, file=f)

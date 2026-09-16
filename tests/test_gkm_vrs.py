@@ -179,10 +179,57 @@ def test_inherits_note_precedes_subclasses(vrs_processor, tmp_path):
     cross_schema_rst = render("Ga4ghIdentifiableObject")
     assert "**Inherits:** :ref:`Entity`" in cross_schema_rst
 
+    # 'inherits'-based classes have no allOf composition, so no Composes:.
+    assert "**Composes:**" not in rst
+    assert "**Composes:**" not in cross_schema_rst
+
     # Range has no 'inherits' at all -- no Inherits: line.
     assert "inherits" not in vrs_processor.raw_defs["Range"]
     no_parent_rst = render("Range")
     assert "**Inherits:**" not in no_parent_rst
+
+
+def test_composes_note_for_allof_composed_class(tmp_path):
+    """An allOf-composed class (e.g. AmpAscoCapEvidenceLine, which allOf's
+    va.core:EvidenceLine plus local narrowing) gets a **Composes:** note --
+    the allOf equivalent of **Inherits:**, which flatten_allof's own
+    property-merging doesn't otherwise surface anywhere in the rendered page.
+    """
+    proc = YamlSchemaProcessor(root / "data/va-spec/aac-2017-profile-source.yaml")
+    rst = _render_one(proc, "AmpAscoCapEvidenceLine", tmp_path)
+    assert "**Composes:** :ref:`EvidenceLine`" in rst
+
+
+def test_conditional_constraints_rendered_for_if_then_allof(tmp_path):
+    """allOf `if`/`then` members (AMP/ASCO/CAP's tier-dependent business
+    rules on VariantClinicalSignificanceStatement) are entirely invisible to
+    flatten_allof (no top-level $ref or properties key) -- previously
+    silently dropped from the rendered docs. Each branch now renders as a
+    **Conditional Constraints** bullet list: a const-narrowed nested path
+    ('must be'), a structural narrowing resolved via resolve_type ('is
+    narrowed to'), and a JSON-Schema-boolean-false forbidden property ('is
+    not permitted') all need to render correctly.
+    """
+    proc = YamlSchemaProcessor(root / "data/va-spec/aac-2017-profile-source.yaml")
+    rst = _render_one(proc, "VariantClinicalSignificanceStatement", tmp_path)
+    assert "**Conditional Constraints**" in rst
+
+    assert "If ``classification.primaryCoding.code`` is ``tier i``, then:" in rst
+    assert "* ``classification.name`` must be: ``Tier I``" in rst
+    assert "* ``strength.primaryCoding.code`` must be: ``strong``" in rst
+    assert "* ``direction`` must be: ``supports``" in rst
+    assert "* Required: ``classification``, ``strength``, ``direction``" in rst
+    assert "hasEvidenceLines`` is narrowed to:" in rst
+
+    # tier iii/iv forbid strength entirely (JSON-Schema boolean false).
+    assert "If ``classification.primaryCoding.code`` is ``tier iii``, then:" in rst
+    assert "* ``strength`` is not permitted" in rst
+
+    # an allOf-composed class with no if/then member gets no Conditional
+    # Constraints section (AmpAscoCapEvidenceLine's allOf is just a base ref
+    # + local property narrowing, no conditional branches).
+    ampascocap_rst = _render_one(proc, "AmpAscoCapEvidenceLine", tmp_path)
+    assert "**Conditional Constraints**" not in ampascocap_rst
 
 
 def test_used_in_omits_transitive_subclass_enumeration_mirror(vrs_processor):

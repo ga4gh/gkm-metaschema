@@ -114,3 +114,38 @@ A statement reporting a conclusion from a single study about the clinical signif
       - :ref:`EvidenceLine` | :ref:`iriReference`
       - 0..m
       - An evidence-based argument that supports or disputes the validity of the proposition that a Statement assesses or puts forth as true. The strength and direction of this argument (whether it supports or disputes the proposition, and how strongly) is based on an interpretation of one or more pieces of information as evidence (i.e. 'Evidence Items).
+
+**Conditional Constraints**
+
+If ``classification.primaryCoding.code`` is ``tier i``, then:
+
+* ``hasEvidenceLines`` is narrowed to: :ref:`iriReference` | :ref:`DiagnosticEvidenceLine` | :ref:`PrognosticEvidenceLine` | :ref:`TherapeuticEvidenceLine`
+* ``classification.name`` must be: ``Tier I``
+* ``strength.primaryCoding.code`` must be: ``strong``
+* ``direction`` must be: ``supports``
+* Required: ``classification``, ``strength``, ``direction``
+
+If ``classification.primaryCoding.code`` is ``tier ii``, then:
+
+* ``hasEvidenceLines`` is narrowed to: :ref:`iriReference` | :ref:`DiagnosticEvidenceLine` | :ref:`PrognosticEvidenceLine` | :ref:`TherapeuticEvidenceLine`
+* ``classification.name`` must be: ``Tier II``
+* ``strength.primaryCoding.code`` must be: ``potential``
+* ``direction`` must be: ``supports``
+* Required: ``classification``, ``strength``, ``direction``
+
+If ``classification.primaryCoding.code`` is ``tier iii``, then:
+
+* ``classification.name`` must be: ``Tier III``
+* ``strength`` is not permitted
+* ``direction`` must be: ``neutral``
+* Required: ``direction``
+
+If ``classification.primaryCoding.code`` is ``tier iv``, then:
+
+* ``classification.name`` must be: ``Tier IV``
+* ``strength`` is not permitted
+* ``direction`` must be: ``disputes``
+* Required: ``direction``
+
+
+**Composes:** :ref:`Statement`

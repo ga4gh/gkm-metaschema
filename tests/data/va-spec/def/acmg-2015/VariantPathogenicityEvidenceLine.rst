@@ -112,4 +112,81 @@ An Evidence Line that describes how a specific type of information was interpret
       - 0..1
       - The evidence outcome provides a single string that summarizes 'directionOfEvidenceProvided' and 'strengthOfEvidenceProvided' assessments, along with the specific ACMG criterion used in these assessments. Rules for constructing this string are as follows, and enforced by a regex constraint: (1) If a criterion is met and its default strength is not altered, the outcome is simply the criterion code (e.g. 'PM2' when the PM2 criteria is met with moderate strength); (2) If a criterion is met and its default strength is altered, the outcome is the criterion code plus the altered strength value (e.g. 'PS3_moderate' when PS3 is met with an adjusted moderate strength); (3)  If a criterion is not met, the outcome is the criterion code plus the string 'not_met' (e.g. 'PS3_not_met').
 
+**Conditional Constraints**
+
+If ``directionOfEvidenceProvided`` is one of: ``supports``, ``disputes``, then:
+
+* Required: ``strengthOfEvidenceProvided``
+
+If ``methodType`` is ``Population Data Assessment``, then:
+
+* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+
+If ``methodType`` is ``Case-Control Enrichment Assessment``, then:
+
+* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+
+If ``methodType`` is ``Null variant assessment``, then:
+
+* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+
+If ``methodType`` is ``Same amino acid change assessment``, then:
+
+* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+
+If ``methodType`` is ``Mutational hot spot and functional domain assessment``, then:
+
+* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+
+If ``methodType`` is ``Protein length change assessment``, then:
+
+* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+
+If ``methodType`` is ``Novel missense position assessment``, then:
+
+* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+
+If ``methodType`` is ``Variant spectrum assessment``, then:
+
+* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+
+If ``methodType`` is ``In silico functional impact assessment``, then:
+
+* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+
+If ``methodType`` is ``Predicted silent variant assessment``, then:
+
+* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+
+If ``methodType`` is ``Functional Data Assessment``, then:
+
+* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+
+If ``methodType`` is ``Segregation Data Assessment``, then:
+
+* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+
+If ``methodType`` is ``De Novo Data Assessment``, then:
+
+* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+
+If ``methodType`` is ``Cis/trans variant assessment``, then:
+
+* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+
+If ``methodType`` is ``Reputable Source Assessment``, then:
+
+* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+
+If ``methodType`` is ``Phenotype-gene specificity assessment``, then:
+
+* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+
+If ``methodType`` is ``Alternative cause assessment``, then:
+
+* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+
+
+**Composes:** :ref:`EvidenceLine`
+
 **Used in:** :ref:`VariantPathogenicityStatement`

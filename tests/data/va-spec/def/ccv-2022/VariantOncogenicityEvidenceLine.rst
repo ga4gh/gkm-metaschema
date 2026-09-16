@@ -112,4 +112,45 @@ An Evidence Line that describes how evidence for a variant was interpreted to de
       - 0..1
       - The evidence outcome provides a single string that summarizes 'directionOfEvidenceProvided' and 'strengthOfEvidenceProvided' assessments, along with the specific CCV criterion used in these assessments. Rules for constructing this string are as follows, and enforced by a regex constraint: (1) If a criterion is met and its default strength is not altered, the outcome is simply the criterion code (e.g. 'OM2' when the OM2 criteria is met with moderate strength); (2) If a criterion is met and its default strength is altered, the outcome is the criterion code plus the altered strength value (e.g. 'OS2_moderate' when OS2 is met with an adjusted moderate strength); (3)  If a criterion is not met, the outcome is the criterion code plus the string 'not_met' (e.g. 'OS2_not_met').
 
+**Conditional Constraints**
+
+If ``directionOfEvidenceProvided`` is one of: ``supports``, ``disputes``, then:
+
+* Required: ``strengthOfEvidenceProvided``
+
+If ``specifiedBy.methodType`` is ``population_frequency``, then:
+
+* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+
+If ``specifiedBy.methodType`` is ``functional_assay``, then:
+
+* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+
+If ``specifiedBy.methodType`` is ``primary_sequence_consequence``, then:
+
+* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+
+If ``specifiedBy.methodType`` is ``functional_domain_location``, then:
+
+* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+
+If ``specifiedBy.methodType`` is ``amino_acid_or_residue_analogy``, then:
+
+* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+
+If ``specifiedBy.methodType`` is ``somatic_hotspot_recurrence``, then:
+
+* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+
+If ``specifiedBy.methodType`` is ``computational_prediction``, then:
+
+* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+
+If ``specifiedBy.methodType`` is ``single_genetic_etiology_context``, then:
+
+* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+
+
+**Composes:** :ref:`EvidenceLine`
+
 **Used in:** :ref:`VariantOncogenicityStatement`
