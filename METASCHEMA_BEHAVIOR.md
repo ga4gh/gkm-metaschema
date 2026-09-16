@@ -212,7 +212,13 @@ Why the distinction matters:
     entity) is flattened **recursively**, so its own composed properties (and
     its base's, transitively) are picked up too — not silently dropped, which
     a single-level lookup would do. `oneOf`/`anyOf` unions render a "one of /
-    any of the following" summary.
+    any of the following" summary, describing each member by whichever of
+    its shape it has: a `$ref`/`$refCurie`/nested `oneOf`/`anyOf` (the
+    referenced type), a `properties` narrowing ("an object constraining
+    `X`"), a bare `required` list ("an object requiring `X`" — e.g.
+    `MappableConcept`'s "`name` or `primaryCoding` must be present"
+    `anyOf`), both together, or, only if none of those apply, the generic
+    "an object with additional constraints" fallback.
   - Each class table is followed by **Inherits:** (the class's own direct
     `inherits` target, if any — a cross-schema `namespace:Class` value
     resolves to the bare class name), **Composes:** (an `allOf`-composed

@@ -189,10 +189,15 @@ def describe_composition_member(member: dict) -> str:
     """Human-readable RST for a single allOf/oneOf/anyOf member schema."""
     if any(key in member for key in ("$ref", "$refCurie", "oneOf", "anyOf")):
         return resolve_type(member)
-    if "properties" in member:
-        fields = ", ".join(f"``{name}``" for name in member["properties"])
-        if fields:
-            return f"an object constraining {fields}"
+    parts = []
+    properties = ", ".join(f"``{name}``" for name in member.get("properties", {}))
+    if properties:
+        parts.append(f"constraining {properties}")
+    required = ", ".join(f"``{name}``" for name in member.get("required", []))
+    if required:
+        parts.append(f"requiring {required}")
+    if parts:
+        return "an object " + " and ".join(parts)
     return "an object with additional constraints"
 
 
