@@ -215,10 +215,15 @@ Why the distinction matters:
     any of the following" summary, describing each member by whichever of
     its shape it has: a `$ref`/`$refCurie`/nested `oneOf`/`anyOf` (the
     referenced type), a `properties` narrowing ("an object constraining
-    `X`"), a bare `required` list ("an object requiring `X`" — e.g.
-    `MappableConcept`'s "`name` or `primaryCoding` must be present"
-    `anyOf`), both together, or, only if none of those apply, the generic
-    "an object with additional constraints" fallback.
+    *X*"), a bare `required` list ("an object requiring *X*"), both
+    together, or, only if none of those apply, the generic "an object with
+    additional constraints" fallback. **Exception:** if *every* member of
+    the `oneOf`/`anyOf` reduces to a bare `required` list (the "at least one
+    of these properties must be present" idiom — e.g. `MappableConcept`'s
+    `anyOf: [{required: [name]}, {required: [primaryCoding]}]`), this
+    bullet-list summary is skipped entirely in favor of one concise sentence
+    under **Additional Constraints** (see below) — "This class requires at
+    least one of *name* or *primaryCoding*."
   - Each class table is followed by **Inherits:** (the class's own direct
     `inherits` target, if any — a cross-schema `namespace:Class` value
     resolves to the bare class name), **Composes:** (an `allOf`-composed
@@ -229,32 +234,50 @@ Why the distinction matters:
     `inherits` resolves to it — the mirror of **Inherits:**), and **Used
     in:** (classes that reference it via `$ref`/`$refCurie`) cross-reference
     lists, in that order.
-  - An `allOf` member's `if`/`then`/`else` (business-rule-style conditional
-    narrowing — e.g. AMP/ASCO/CAP's tier-/methodType-dependent constraints)
-    has neither a top-level `$ref` nor a top-level `properties` key (the
-    condition/consequence properties are nested one level deeper), so
-    `flatten_allof` silently skips it and the main property table shows only
-    the unconditional base shape. `render_conditional_constraints` renders
-    every such member under a **Conditional Constraints** heading:
-    - A member whose condition reduces to a single "property equals value"
-      pin (`const`/`enum`/a bounds-style keyword on exactly one nested
-      property — the common case) is rendered as a row in one shared
-      **If property... / has value... / then property... / must...** table,
-      one row per consequence property (or per bare `required` entry that
-      has no narrowing of its own, rendered as "be provided"). This is
-      flatter and easier to scan than prose when a class has many such
-      branches (e.g. a `methodType`-keyed rule per criterion).
-    - Anything that doesn't reduce that way — a compound (multi-property)
-      condition, an `else`, or a condition pinned via a structural
-      (`resolve_type`-resolved) constraint rather than a plain value —
-      falls back to prose: `If <condition>, then: <bullet list>`.
-    - Each consequence property (table cell or prose bullet) resolves to one
-      of: a `const`/`enum` value ("have value `X`" / "have `one of: ...`"),
-      a `pattern` (regex) constraint ("match the pattern `X`"), a
-      structural narrowing via `resolve_type` ("be narrowed to: `X`" / "be
-      one of: `X`, `Y`" for a `$ref`/union), the JSON-Schema-boolean-`false`
-      forbidden-property form ("not be provided"), or any other bounds-style
-      keyword (`minimum`/`maximum`/`minLength`/`maxLength`/`format`) that
+  - **Additional Constraints.** `render_additional_constraints` renders two
+    otherwise-invisible constraint shapes under one shared **Additional
+    Constraints** heading:
+    - An `allOf` member's `if`/`then`/`else` (business-rule-style
+      conditional narrowing — e.g. AMP/ASCO/CAP's tier-/methodType-dependent
+      constraints) has neither a top-level `$ref` nor a top-level
+      `properties` key (the condition/consequence properties are nested one
+      level deeper), so `flatten_allof` silently skips it and the main
+      property table shows only the unconditional base shape.
+      - A member whose condition reduces to a single "property equals
+        value" pin (`const`/`enum`/a bounds-style keyword on exactly one
+        nested property — the common case) is rendered as a row in one
+        shared **If property... / has value... / then property... /
+        must...** table, one row per consequence property (or per bare
+        `required` entry that has no narrowing of its own, rendered as "be
+        provided"). This is flatter and easier to scan than prose when a
+        class has many such branches (e.g. a `methodType`-keyed rule per
+        criterion).
+      - Anything that doesn't reduce that way — a compound (multi-property)
+        condition, an `else`, or a condition pinned via a structural
+        (`resolve_type`-resolved) constraint rather than a plain value —
+        falls back to prose: `If <condition>, then: <bullet list>`.
+    - A top-level `oneOf`/`anyOf` that's purely a set of bare `required`
+      alternatives (the "at least one of these properties must be present"
+      idiom — see above) renders as one concise sentence here instead of
+      `resolve_composition`'s generic per-member bullet list, e.g. "This
+      class requires at least one of *name* or *primaryCoding*." When this
+      sentence is rendered, `render_class` skips calling
+      `resolve_composition` for the class, so the same constraint isn't
+      described twice.
+    - **Styling convention** throughout both: a property/path name renders
+      in *italics* (e.g. `*specifiedBy.methodType*`); a concrete value or
+      pattern renders in **bold** (e.g. `**population_frequency**`,
+      `**^(SBVS1|SBS1|OP4)(_.+)?$**`) — easier to visually distinguish "what
+      property" from "what value" than the uniform ``code`` literal styling
+      used elsewhere in the docs. Each consequence property (table cell or
+      prose bullet) resolves to one of: a `const`/`enum` value ("have value
+      **X**" / "have one of: **X**, **Y**"), a `pattern` (regex) constraint
+      ("match the pattern **X**"), a structural narrowing via `resolve_type`
+      ("be narrowed to: `X`" / "be one of: `X`, `Y`" for a `$ref`/union,
+      still `:ref:`-linked rather than bolded), the
+      JSON-Schema-boolean-`false` forbidden-property form ("not be
+      provided"), or any other bounds-style keyword
+      (`minimum`/`maximum`/`minLength`/`maxLength`/`format`) that
       `resolve_type` doesn't recognize. `resolve_type`'s internal
       `"_Not Specified_"` sentinel never leaks into rendered docs — every
       unhandled keyword falls back through `_describe_bounds`.
@@ -510,3 +533,17 @@ Behaviors intentionally **removed / changed** during the migration:
   `va.core:EvidenceLine`) — previously rendered a table with only the
   subclass's own locally-added property, silently dropping everything the
   intermediate base itself composed in.
+- **Conditional Constraints renamed to Additional Constraints**, and
+  broadened to also cover a top-level `oneOf`/`anyOf` that's purely a set of
+  bare `required` alternatives (previously described only via
+  `resolve_composition`'s generic per-member bullet list, which rendered an
+  uninformative duplicate line for e.g. `MappableConcept`'s `anyOf` before a
+  separate fix taught `describe_composition_member` to name a `required`-only
+  member's properties). That specific idiom now collapses to one concise
+  sentence — "This class requires at least one of *name* or
+  *primaryCoding*." — under the same heading as the `if`/`then`/`else`
+  table/prose rendering, rather than two unrelated-looking sections. Also:
+  property/path names throughout **Additional Constraints** now render in
+  *italics* and concrete values/patterns in **bold**, replacing the uniform
+  ``code`` literal styling used for both — easier to tell "what property"
+  from "what value" at a glance (see [§8](#8-outputs)).

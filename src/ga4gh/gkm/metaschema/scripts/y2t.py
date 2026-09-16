@@ -190,10 +190,10 @@ def describe_composition_member(member: dict) -> str:
     if any(key in member for key in ("$ref", "$refCurie", "oneOf", "anyOf")):
         return resolve_type(member)
     parts = []
-    properties = ", ".join(f"``{name}``" for name in member.get("properties", {}))
+    properties = ", ".join(f"*{name}*" for name in member.get("properties", {}))
     if properties:
         parts.append(f"constraining {properties}")
-    required = ", ".join(f"``{name}``" for name in member.get("required", []))
+    required = ", ".join(f"*{name}*" for name in member.get("required", []))
     if required:
         parts.append(f"requiring {required}")
     if parts:
@@ -337,12 +337,12 @@ def _describe_schema_paths(attribs: dict, path: list) -> list:
             desc = "is not permitted" if member is False else "is permitted with any value"
             results.append((dotted, "raw", desc))
         elif "const" in member:
-            results.append((dotted, "value", f"``{member['const']}``"))
+            results.append((dotted, "value", f"**{member['const']}**"))
         elif "enum" in member:
-            values = ", ".join(f"``{v}``" for v in member["enum"])
+            values = ", ".join(f"**{v}**" for v in member["enum"])
             results.append((dotted, "value", f"one of: {values}"))
         elif "pattern" in member:
-            results.append((dotted, "raw", f"must match the pattern ``{member['pattern']}``"))
+            results.append((dotted, "raw", f"must match the pattern **{member['pattern']}**"))
         elif "properties" in member:
             results.extend(_describe_schema_paths(member, new_path))
         else:
@@ -366,9 +366,9 @@ def _describe_bounds(member: dict) -> str:
     parts = []
     for key in ("minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "minLength", "maxLength"):
         if key in member:
-            parts.append(f"{key}: ``{member[key]}``")
+            parts.append(f"{key}: **{member[key]}**")
     if "format" in member:
-        parts.append(f"format: ``{member['format']}``")
+        parts.append(f"format: **{member['format']}**")
     return "; ".join(parts)
 
 
@@ -391,17 +391,17 @@ def _condition_leaf(if_schema: dict) -> tuple | None:
 
 def _must_phrase(kind: str, desc: str) -> str:
     """Render a then/else leaf's (kind, description) as the verb phrase for
-    the **must...** table column, e.g. "have value ``X``", "match the
-    pattern ``Y``", "not be provided"."""
+    the **must...** table column, e.g. "have value **X**", "match the
+    pattern **Y**", "not be provided"."""
     if kind == "raw":
         if desc == "is not permitted":
             return "not be provided"
         if desc == "is permitted with any value":
             return "be provided, with any value"
-        # e.g. "must match the pattern ``X``" -> "match the pattern ``X``"
+        # e.g. "must match the pattern **X**" -> "match the pattern **X**"
         return desc.removeprefix("must ")
     if kind == "value":
-        return f"have value {desc}" if desc.startswith("``") else f"have {desc}"
+        return f"have value {desc}" if desc.startswith("**") else f"have {desc}"
     # kind == "type": a structural narrowing resolved via resolve_type.
     if " | " in desc:
         return f"be one of: {desc.replace(' | ', ', ')}"
@@ -429,7 +429,7 @@ def _render_conditional_prose(f, member: dict) -> None:
     general fallback for a condition/consequence shape that doesn't reduce
     to a single "property equals value" table row (see _condition_leaf)."""
     condition = _describe_schema_paths(member["if"], [])
-    cond_text = " and ".join(f"``{p}`` {d}" if k == "raw" else f"``{p}`` is {d}" for p, k, d in condition)
+    cond_text = " and ".join(f"*{p}* {d}" if k == "raw" else f"*{p}* is {d}" for p, k, d in condition)
     print(f"If {cond_text or 'the condition below holds'}, then:\n", file=f)
     for branch_key, lede in (("then", None), ("else", "Otherwise")):
         branch = member.get(branch_key)
@@ -440,20 +440,56 @@ def _render_conditional_prose(f, member: dict) -> None:
         for path, kind, desc in _describe_schema_paths(branch, []):
             if kind == "raw":
                 # desc is a complete, self-contained clause (its own verb).
-                print(f"* ``{path}`` {desc}", file=f)
+                print(f"* *{path}* {desc}", file=f)
                 continue
             verb = "must be" if kind == "value" else "is narrowed to"
-            print(f"* ``{path}`` {verb}: {desc}", file=f)
+            print(f"* *{path}* {verb}: {desc}", file=f)
         if branch.get("required"):
-            req = ", ".join(f"``{r}``" for r in branch["required"])
+            req = ", ".join(f"*{r}*" for r in branch["required"])
             print(f"* Required: {req}", file=f)
     print(file=f)
 
 
-def render_conditional_constraints(f, class_definition: dict) -> None:
-    """Render allOf `if`/`then`/`else` members -- business-rule-style
-    conditional narrowing (e.g. AMP/ASCO/CAP tier-dependent constraints) --
-    under a **Conditional Constraints** heading.
+def _required_only_member(member: dict) -> list | None:
+    """If ``member`` is a bare ``required``-only oneOf/anyOf alternative --
+    no properties/refs/nested composition of its own -- return its required
+    property names. Otherwise None."""
+    if member.get("required") and not any(
+        key in member for key in ("$ref", "$refCurie", "oneOf", "anyOf", "properties")
+    ):
+        return member["required"]
+    return None
+
+
+def _join_alternatives(phrases: list) -> str:
+    """Join phrases as an Oxford-comma "X, Y, or Z" list ("X or Y" for two;
+    ``phrases`` verbatim for one)."""
+    if len(phrases) == 1:
+        return phrases[0]
+    if len(phrases) == 2:
+        return f"{phrases[0]} or {phrases[1]}"
+    return ", ".join(phrases[:-1]) + f", or {phrases[-1]}"
+
+
+def _describe_required_alternatives(members: list) -> str | None:
+    """If every oneOf/anyOf member reduces to a bare ``required`` list -- the
+    "at least one of these properties must be present" idiom, e.g.
+    MappableConcept's ``anyOf: [{required: [name]}, {required:
+    [primaryCoding]}]`` -- describe it as one concise sentence instead of a
+    bullet per member (see ``describe_composition_member``). Returns None if
+    any member doesn't reduce that way.
+    """
+    alt_lists = [_required_only_member(m) for m in members]
+    if not alt_lists or any(a is None for a in alt_lists):
+        return None
+    phrases = [" and ".join(f"*{r}*" for r in reqs) for reqs in alt_lists]
+    return f"This class requires at least one of {_join_alternatives(phrases)}."
+
+
+def render_additional_constraints(f, class_definition: dict) -> bool:
+    """Render allOf `if`/`then`/`else` members and a bare oneOf/anyOf "at
+    least one of these properties must be present" idiom under one
+    **Additional Constraints** heading.
 
     `flatten_allof` only understands a base `$ref` or a flat `properties`
     member; an `if`/`then` member has neither at its own top level (the
@@ -468,11 +504,17 @@ def render_conditional_constraints(f, class_definition: dict) -> None:
     than prose when a class has many such branches. Anything that doesn't
     reduce that way (a compound condition, an `else`, or a condition pinned
     via a structural/pattern/boolean-schema constraint rather than a plain
-    value) falls back to the previous prose rendering.
+    value) falls back to prose.
+
+    Separately, a top-level oneOf/anyOf that's purely a set of `required`-only
+    alternatives (e.g. MappableConcept's "name or primaryCoding must be
+    present") is rendered here as one concise sentence, rather than
+    ``resolve_composition``'s generic per-member bullet list. Returns True
+    when that sentence was rendered, so the caller can skip
+    ``resolve_composition`` for this class and avoid describing the same
+    constraint twice.
     """
     branches = [m for m in class_definition.get("allOf", []) if "if" in m]
-    if not branches:
-        return
     table_rows = []
     prose_members = []
     for member in branches:
@@ -483,7 +525,16 @@ def render_conditional_constraints(f, class_definition: dict) -> None:
             continue
         if_path, has_value = leaf
         table_rows.extend((if_path, has_value, then_path, must) for then_path, must in rows)
-    print("\n**Conditional Constraints**\n", file=f)
+
+    composition_sentence = None
+    for keyword in ("oneOf", "anyOf"):
+        if keyword in class_definition:
+            composition_sentence = _describe_required_alternatives(class_definition[keyword])
+            break
+
+    if not table_rows and not prose_members and not composition_sentence:
+        return False
+    print("\n**Additional Constraints**\n", file=f)
     if table_rows:
         print(
             """.. list-table::
@@ -500,14 +551,17 @@ def render_conditional_constraints(f, class_definition: dict) -> None:
         )
         for if_path, has_value, then_path, must in table_rows:
             row = f"""\
-   *  - ``{if_path}``
+   *  - *{if_path}*
       - {has_value}
-      - ``{then_path}``
+      - *{then_path}*
       - {must}"""
             print(row, file=f)
         print(file=f)
     for member in prose_members:
         _render_conditional_prose(f, member)
+    if composition_sentence:
+        print(composition_sentence + "\n", file=f)
+    return composition_sentence is not None
 
 
 def render_information_model(f, properties: dict, required: list, note: str = "") -> None:
@@ -772,10 +826,11 @@ def render_class(
                     print("\n" + composition, file=f)
         elif p is not None:
             render_information_model(f, class_definition[p], class_definition.get("required", []), inheritance)
-        render_conditional_constraints(f, class_definition)
-        composition = resolve_composition(class_definition)
-        if composition:
-            print("\n" + composition, file=f)
+        consumed_composition = render_additional_constraints(f, class_definition)
+        if not consumed_composition:
+            composition = resolve_composition(class_definition)
+            if composition:
+                print("\n" + composition, file=f)
         _print_xrefs(f, proc, class_name, used_in, subclasses)
 
 

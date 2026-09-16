@@ -202,43 +202,44 @@ def test_composes_note_for_allof_composed_class(tmp_path):
     assert "**Composes:** :ref:`EvidenceLine`" in rst
 
 
-def test_conditional_constraints_rendered_for_if_then_allof(tmp_path):
+def test_additional_constraints_rendered_for_if_then_allof(tmp_path):
     """allOf `if`/`then` members (AMP/ASCO/CAP's tier-dependent business
     rules on VariantClinicalSignificanceStatement) are entirely invisible to
     flatten_allof (no top-level $ref or properties key) -- previously
     silently dropped from the rendered docs. Each branch's condition reduces
     to a single "property equals value" pin, so all of them render as rows
-    in one **Conditional Constraints** table: a const-narrowed nested path
+    in one **Additional Constraints** table: a const-narrowed nested path
     ('have value'), a structural narrowing resolved via resolve_type ('be
     one of'/'be narrowed to'), and a JSON-Schema-boolean-false forbidden
-    property ('not be provided') all need to render correctly.
+    property ('not be provided') all need to render correctly. Property
+    paths render in italics, values/patterns in bold.
     """
     proc = YamlSchemaProcessor(root / "data/va-spec/aac-2017-profile-source.yaml")
     rst = _render_one(proc, "VariantClinicalSignificanceStatement", tmp_path)
-    assert "**Conditional Constraints**" in rst
+    assert "**Additional Constraints**" in rst
     assert "If property..." in rst
     assert "has value..." in rst
     assert "then property..." in rst
     assert "must..." in rst
 
-    assert "``classification.primaryCoding.code``\n      - ``tier i``\n" in rst
-    assert "``classification.name``\n      - have value ``Tier I``" in rst
-    assert "``strength.primaryCoding.code``\n      - have value ``strong``" in rst
-    assert "``direction``\n      - have value ``supports``" in rst
+    assert "*classification.primaryCoding.code*\n      - **tier i**\n" in rst
+    assert "*classification.name*\n      - have value **Tier I**" in rst
+    assert "*strength.primaryCoding.code*\n      - have value **strong**" in rst
+    assert "*direction*\n      - have value **supports**" in rst
     assert "be one of: :ref:`iriReference`, :ref:`DiagnosticEvidenceLine`" in rst
 
     # tier iii/iv forbid strength entirely (JSON-Schema boolean false).
-    assert "``classification.primaryCoding.code``\n      - ``tier iii``\n" in rst
-    assert "``strength``\n      - not be provided" in rst
+    assert "*classification.primaryCoding.code*\n      - **tier iii**\n" in rst
+    assert "*strength*\n      - not be provided" in rst
 
-    # an allOf-composed class with no if/then member gets no Conditional
-    # Constraints section (AmpAscoCapEvidenceLine's allOf is just a base ref
-    # + local property narrowing, no conditional branches).
+    # an allOf-composed class with no if/then member and no required-only
+    # oneOf/anyOf gets no Additional Constraints section (AmpAscoCapEvidenceLine's
+    # allOf is just a base ref + local property narrowing).
     ampascocap_rst = _render_one(proc, "AmpAscoCapEvidenceLine", tmp_path)
-    assert "**Conditional Constraints**" not in ampascocap_rst
+    assert "**Additional Constraints**" not in ampascocap_rst
 
 
-def test_conditional_constraints_pattern_narrowing_is_readable(tmp_path):
+def test_additional_constraints_pattern_narrowing_is_readable(tmp_path):
     """resolve_type only recognizes type/$ref/$refCurie/allOf/oneOf/anyOf --
     a then-branch that narrows a property via `pattern` (regex) instead of
     const/enum/type falls through resolve_type's cases and used to leak its
@@ -252,14 +253,14 @@ def test_conditional_constraints_pattern_narrowing_is_readable(tmp_path):
     rst = _render_one(proc, "VariantOncogenicityEvidenceLine", tmp_path)
     assert "_Not Specified_" not in rst
     assert (
-        "``specifiedBy.methodType``\n      - ``population_frequency``\n"
-        "      - ``evidenceOutcome.primaryCoding.code``\n"
-        "      - match the pattern ``^(SBVS1|SBS1|OP4)(_.+)?$``"
+        "*specifiedBy.methodType*\n      - **population_frequency**\n"
+        "      - *evidenceOutcome.primaryCoding.code*\n"
+        "      - match the pattern **^(SBVS1|SBS1|OP4)(_.+)?$**"
     ) in rst
     # a required-only consequence (no narrowing of its own) reads as "be provided".
     assert (
-        "``directionOfEvidenceProvided``\n      - one of: ``supports``, ``disputes``\n"
-        "      - ``strengthOfEvidenceProvided``\n"
+        "*directionOfEvidenceProvided*\n      - one of: **supports**, **disputes**\n"
+        "      - *strengthOfEvidenceProvided*\n"
         "      - be provided"
     ) in rst
 
@@ -291,16 +292,16 @@ def test_acmg_2015_methodtype_condition_is_nested_under_specifiedby(tmp_path):
         assert "methodType" not in condition["properties"]
 
     rst = _render_one(proc, "VariantPathogenicityEvidenceLine", tmp_path)
-    assert "``specifiedBy.methodType``" in rst
-    assert "``methodType``\n" not in rst
+    assert "*specifiedBy.methodType*" in rst
+    assert "*methodType*\n" not in rst
 
 
-def test_conditional_constraints_complex_condition_falls_back_to_prose(tmp_path):
+def test_additional_constraints_complex_condition_falls_back_to_prose(tmp_path):
     """A condition that isn't a single "property equals value" pin -- here, a
     compound (multi-property) `if` -- doesn't reduce to a table row, so it
-    falls back to the original prose rendering rather than being dropped or
-    misrepresented. Uses a synthetic schema since none of the real va-spec/
-    catvrs fixtures happen to have a compound if-condition.
+    falls back to prose rather than being dropped or misrepresented. Uses a
+    synthetic schema since none of the real va-spec/catvrs fixtures happen
+    to have a compound if-condition.
     """
     source = {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -333,12 +334,12 @@ def test_conditional_constraints_complex_condition_falls_back_to_prose(tmp_path)
     source_fp.write_text(yaml.safe_dump(source))
     proc = YamlSchemaProcessor(source_fp)
     rst = _render_one(proc, "Widget", tmp_path)
-    assert "**Conditional Constraints**" in rst
+    assert "**Additional Constraints**" in rst
     # falls back to prose, not a table -- a compound if has no single "If
     # property.../has value..." row to contribute.
     assert "If property..." not in rst
-    assert "If ``kind`` is ``gadget`` and ``size`` is ``large``, then:" in rst
-    assert "* ``color`` must be: ``red``" in rst
+    assert "If *kind* is **gadget** and *size* is **large**, then:" in rst
+    assert "* *color* must be: **red**" in rst
 
 
 def test_used_in_omits_transitive_subclass_enumeration_mirror(vrs_processor):
@@ -366,28 +367,34 @@ def test_composition_member_required_only_is_described_specifically():
     additional constraints" fallback for *both* branches, rendering an
     unhelpful duplicate line instead of naming what's actually required.
     """
-    assert describe_composition_member({"required": ["name"]}) == "an object requiring ``name``"
+    assert describe_composition_member({"required": ["name"]}) == "an object requiring *name*"
     assert describe_composition_member({"required": ["name", "primaryCoding"]}) == (
-        "an object requiring ``name``, ``primaryCoding``"
+        "an object requiring *name*, *primaryCoding*"
     )
     # a member with both a properties narrowing and a required list combines both.
     assert describe_composition_member({"properties": {"code": {}}, "required": ["code"]}) == (
-        "an object constraining ``code`` and requiring ``code``"
+        "an object constraining *code* and requiring *code*"
     )
     # genuinely nothing to describe still falls back to the generic text.
     assert describe_composition_member({}) == "an object with additional constraints"
 
 
-def test_mappable_concept_anyof_members_render_distinctly(gkm_core_processor, tmp_path):
-    """Regression fixture for the bug above: MappableConcept's anyOf (either
-    `name` or `primaryCoding` must be present) previously rendered as two
-    identical, uninformative "an object with additional constraints"
-    bullets -- now each names the property it actually requires.
+def test_mappable_concept_anyof_renders_as_concise_sentence(gkm_core_processor, tmp_path):
+    """MappableConcept's anyOf -- [{required: [name]}, {required:
+    [primaryCoding]}], meaning "at least one of these must be present" --
+    previously rendered as two identical, uninformative "an object with
+    additional constraints" bullets. Since every member reduces to a bare
+    `required` list, it now renders as one concise sentence under
+    **Additional Constraints** instead of describe_composition_member's
+    generic per-member bullet list (which remains the fallback for mixed
+    oneOf/anyOf shapes -- see test_composition_member_required_only_is_described_specifically).
     """
     rst = _render_one(gkm_core_processor, "MappableConcept", tmp_path)
     assert "an object with additional constraints" not in rst
-    assert "* an object requiring ``name``" in rst
-    assert "* an object requiring ``primaryCoding``" in rst
+    assert "an object requiring" not in rst
+    assert "**Additional Constraints**" in rst
+    assert "This class requires at least one of *name* or *primaryCoding*." in rst
+    assert "This class must match" not in rst
 
 
 def test_flatten_allof_recurses_through_composed_base(tmp_path):
