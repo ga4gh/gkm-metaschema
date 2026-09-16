@@ -23,6 +23,7 @@ import yaml
 
 from ga4gh.gkm.metaschema.scripts.source2splitjs import split_defs_to_js
 from ga4gh.gkm.metaschema.scripts.y2t import build_cross_references
+from ga4gh.gkm.metaschema.scripts.y2t import describe_composition_member
 from ga4gh.gkm.metaschema.scripts.y2t import flatten_allof
 from ga4gh.gkm.metaschema.scripts.y2t import main as y2t
 from ga4gh.gkm.metaschema.scripts.y2t import render_class
@@ -323,6 +324,39 @@ def test_used_in_omits_transitive_subclass_enumeration_mirror(vrs_processor):
     # the direct relationship is unaffected: MolecularVariation's own
     # Subclasses: still correctly lists Allele.
     assert "Allele" in subclasses.get("MolecularVariation", set())
+
+
+def test_composition_member_required_only_is_described_specifically():
+    """describe_composition_member only handled $ref/$refCurie/oneOf/anyOf
+    and `properties`-bearing members -- a `required`-only member (no
+    properties/refs of its own, e.g. MappableConcept's anyOf: [{required:
+    [name]}, {required: [primaryCoding]}], meaning "at least one of these
+    must be present") fell through to the generic "an object with
+    additional constraints" fallback for *both* branches, rendering an
+    unhelpful duplicate line instead of naming what's actually required.
+    """
+    assert describe_composition_member({"required": ["name"]}) == "an object requiring ``name``"
+    assert describe_composition_member({"required": ["name", "primaryCoding"]}) == (
+        "an object requiring ``name``, ``primaryCoding``"
+    )
+    # a member with both a properties narrowing and a required list combines both.
+    assert describe_composition_member({"properties": {"code": {}}, "required": ["code"]}) == (
+        "an object constraining ``code`` and requiring ``code``"
+    )
+    # genuinely nothing to describe still falls back to the generic text.
+    assert describe_composition_member({}) == "an object with additional constraints"
+
+
+def test_mappable_concept_anyof_members_render_distinctly(gkm_core_processor, tmp_path):
+    """Regression fixture for the bug above: MappableConcept's anyOf (either
+    `name` or `primaryCoding` must be present) previously rendered as two
+    identical, uninformative "an object with additional constraints"
+    bullets -- now each names the property it actually requires.
+    """
+    rst = _render_one(gkm_core_processor, "MappableConcept", tmp_path)
+    assert "an object with additional constraints" not in rst
+    assert "* an object requiring ``name``" in rst
+    assert "* an object requiring ``primaryCoding``" in rst
 
 
 def test_flatten_allof_recurses_through_composed_base(tmp_path):

@@ -79,8 +79,8 @@ Some MappableConcept attributes are inherited from :ref:`Entity`.
 
 This class must match **any of** the following:
 
-* an object with additional constraints
-* an object with additional constraints
+* an object requiring ``name``
+* an object requiring ``primaryCoding``
 
 
 **Inherits:** :ref:`Entity`
