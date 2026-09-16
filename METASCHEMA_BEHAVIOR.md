@@ -215,10 +215,43 @@ Why the distinction matters:
     any of the following" summary.
   - Each class table is followed by **Inherits:** (the class's own direct
     `inherits` target, if any — a cross-schema `namespace:Class` value
-    resolves to the bare class name), **Subclasses:** (classes whose
-    `inherits` resolves to it — the mirror of **Inherits:**, immediately
-    below it), and **Used in:** (classes that reference it via
-    `$ref`/`$refCurie`) cross-reference lists.
+    resolves to the bare class name), **Composes:** (an `allOf`-composed
+    class's base class(es), referenced via `$ref`/`$refCurie` at the top of
+    an `allOf` member — the `allOf` equivalent of **Inherits:**, since
+    composition and inheritance are separate, mutually exclusive mechanisms
+    in this codebase's convention), **Subclasses:** (classes whose
+    `inherits` resolves to it — the mirror of **Inherits:**), and **Used
+    in:** (classes that reference it via `$ref`/`$refCurie`) cross-reference
+    lists, in that order.
+  - An `allOf` member's `if`/`then`/`else` (business-rule-style conditional
+    narrowing — e.g. AMP/ASCO/CAP's tier-/methodType-dependent constraints)
+    has neither a top-level `$ref` nor a top-level `properties` key (the
+    condition/consequence properties are nested one level deeper), so
+    `flatten_allof` silently skips it and the main property table shows only
+    the unconditional base shape. `render_conditional_constraints` renders
+    every such member under a **Conditional Constraints** heading:
+    - A member whose condition reduces to a single "property equals value"
+      pin (`const`/`enum`/a bounds-style keyword on exactly one nested
+      property — the common case) is rendered as a row in one shared
+      **If property... / has value... / then property... / must...** table,
+      one row per consequence property (or per bare `required` entry that
+      has no narrowing of its own, rendered as "be provided"). This is
+      flatter and easier to scan than prose when a class has many such
+      branches (e.g. a `methodType`-keyed rule per criterion).
+    - Anything that doesn't reduce that way — a compound (multi-property)
+      condition, an `else`, or a condition pinned via a structural
+      (`resolve_type`-resolved) constraint rather than a plain value —
+      falls back to prose: `If <condition>, then: <bullet list>`.
+    - Each consequence property (table cell or prose bullet) resolves to one
+      of: a `const`/`enum` value ("have value `X`" / "have `one of: ...`"),
+      a `pattern` (regex) constraint ("match the pattern `X`"), a
+      structural narrowing via `resolve_type` ("be narrowed to: `X`" / "be
+      one of: `X`, `Y`" for a `$ref`/union), the JSON-Schema-boolean-`false`
+      forbidden-property form ("not be provided"), or any other bounds-style
+      keyword (`minimum`/`maximum`/`minLength`/`maxLength`/`format`) that
+      `resolve_type` doesn't recognize. `resolve_type`'s internal
+      `"_Not Specified_"` sentinel never leaks into rendered docs — every
+      unhandled keyword falls back through `_describe_bounds`.
   - A **GA4GH Digest** section (prefix + inherent properties) is rendered for
     **concrete** GA4GH-identifiable classes only. Abstract classes omit it even
     when they carry/inherit a `ga4gh` block, since they are never instantiated —
@@ -447,6 +480,20 @@ Behaviors intentionally **removed / changed** during the migration:
   sentence on the property table hinted at the parent, and only for classes
   that render a property table at all (passthrough and primitive classes had
   no inheritance mention whatsoever).
+- Every `allOf`-composed class's `.rst` now carries a **Composes:** line
+  (the `allOf` equivalent of **Inherits:**) alongside it, and every `allOf`
+  `if`/`then`/`else` member — previously silently dropped by `flatten_allof`
+  and entirely invisible in the rendered docs — now renders under a
+  **Conditional Constraints** heading, either as a row in an **If
+  property.../has value.../then property.../must...** table (when the
+  condition reduces to a single "property equals value" pin) or as prose
+  (see [§8](#8-outputs)). A `then`/`else` consequence narrowed via `pattern`
+  (or any other bounds-style keyword `resolve_type` doesn't recognize) was a
+  real bug found in review: it fell through to `resolve_type`'s internal
+  `"_Not Specified_"` sentinel, which leaked verbatim into the rendered
+  docs (e.g. every CCV/ACMG `methodType`-keyed branch on
+  `VariantOncogenicityEvidenceLine`/`VariantPathogenicityEvidenceLine`) —
+  fixed by `_describe_bounds`.
 - `flatten_allof` (the RST **Information Model** table for `allOf`-composed
   classes) now **recurses** into a referenced base that is itself
   `allOf`-composed, rather than reading only its top-level `properties`. A

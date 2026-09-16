@@ -180,10 +180,133 @@ def test_inherits_note_precedes_subclasses(vrs_processor, tmp_path):
     cross_schema_rst = render("Ga4ghIdentifiableObject")
     assert "**Inherits:** :ref:`Entity`" in cross_schema_rst
 
+    # 'inherits'-based classes have no allOf composition, so no Composes:.
+    assert "**Composes:**" not in rst
+    assert "**Composes:**" not in cross_schema_rst
+
     # Range has no 'inherits' at all -- no Inherits: line.
     assert "inherits" not in vrs_processor.raw_defs["Range"]
     no_parent_rst = render("Range")
     assert "**Inherits:**" not in no_parent_rst
+
+
+def test_composes_note_for_allof_composed_class(tmp_path):
+    """An allOf-composed class (e.g. AmpAscoCapEvidenceLine, which allOf's
+    va.core:EvidenceLine plus local narrowing) gets a **Composes:** note --
+    the allOf equivalent of **Inherits:**, which flatten_allof's own
+    property-merging doesn't otherwise surface anywhere in the rendered page.
+    """
+    proc = YamlSchemaProcessor(root / "data/va-spec/aac-2017-profile-source.yaml")
+    rst = _render_one(proc, "AmpAscoCapEvidenceLine", tmp_path)
+    assert "**Composes:** :ref:`EvidenceLine`" in rst
+
+
+def test_conditional_constraints_rendered_for_if_then_allof(tmp_path):
+    """allOf `if`/`then` members (AMP/ASCO/CAP's tier-dependent business
+    rules on VariantClinicalSignificanceStatement) are entirely invisible to
+    flatten_allof (no top-level $ref or properties key) -- previously
+    silently dropped from the rendered docs. Each branch's condition reduces
+    to a single "property equals value" pin, so all of them render as rows
+    in one **Conditional Constraints** table: a const-narrowed nested path
+    ('have value'), a structural narrowing resolved via resolve_type ('be
+    one of'/'be narrowed to'), and a JSON-Schema-boolean-false forbidden
+    property ('not be provided') all need to render correctly.
+    """
+    proc = YamlSchemaProcessor(root / "data/va-spec/aac-2017-profile-source.yaml")
+    rst = _render_one(proc, "VariantClinicalSignificanceStatement", tmp_path)
+    assert "**Conditional Constraints**" in rst
+    assert "If property..." in rst
+    assert "has value..." in rst
+    assert "then property..." in rst
+    assert "must..." in rst
+
+    assert "``classification.primaryCoding.code``\n      - ``tier i``\n" in rst
+    assert "``classification.name``\n      - have value ``Tier I``" in rst
+    assert "``strength.primaryCoding.code``\n      - have value ``strong``" in rst
+    assert "``direction``\n      - have value ``supports``" in rst
+    assert "be one of: :ref:`iriReference`, :ref:`DiagnosticEvidenceLine`" in rst
+
+    # tier iii/iv forbid strength entirely (JSON-Schema boolean false).
+    assert "``classification.primaryCoding.code``\n      - ``tier iii``\n" in rst
+    assert "``strength``\n      - not be provided" in rst
+
+    # an allOf-composed class with no if/then member gets no Conditional
+    # Constraints section (AmpAscoCapEvidenceLine's allOf is just a base ref
+    # + local property narrowing, no conditional branches).
+    ampascocap_rst = _render_one(proc, "AmpAscoCapEvidenceLine", tmp_path)
+    assert "**Conditional Constraints**" not in ampascocap_rst
+
+
+def test_conditional_constraints_pattern_narrowing_is_readable(tmp_path):
+    """resolve_type only recognizes type/$ref/$refCurie/allOf/oneOf/anyOf --
+    a then-branch that narrows a property via `pattern` (regex) instead of
+    const/enum/type falls through resolve_type's cases and used to leak its
+    internal "_Not Specified_" sentinel straight into the rendered docs.
+    VariantOncogenicityEvidenceLine's CCV methodType branches narrow
+    evidenceOutcome.primaryCoding.code this way and are a real-world
+    regression fixture for it -- each is a single-value if-condition, so
+    they render as table rows.
+    """
+    proc = YamlSchemaProcessor(root / "data/va-spec/ccv-2022-profile-source.yaml")
+    rst = _render_one(proc, "VariantOncogenicityEvidenceLine", tmp_path)
+    assert "_Not Specified_" not in rst
+    assert (
+        "``specifiedBy.methodType``\n      - ``population_frequency``\n"
+        "      - ``evidenceOutcome.primaryCoding.code``\n"
+        "      - match the pattern ``^(SBVS1|SBS1|OP4)(_.+)?$``"
+    ) in rst
+    # a required-only consequence (no narrowing of its own) reads as "be provided".
+    assert (
+        "``directionOfEvidenceProvided``\n      - one of: ``supports``, ``disputes``\n"
+        "      - ``strengthOfEvidenceProvided``\n"
+        "      - be provided"
+    ) in rst
+
+
+def test_conditional_constraints_complex_condition_falls_back_to_prose(tmp_path):
+    """A condition that isn't a single "property equals value" pin -- here, a
+    compound (multi-property) `if` -- doesn't reduce to a table row, so it
+    falls back to the original prose rendering rather than being dropped or
+    misrepresented. Uses a synthetic schema since none of the real va-spec/
+    catvrs fixtures happen to have a compound if-condition.
+    """
+    source = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://example.org/compound-condition-source.yaml",
+        "title": "Compound Condition Test",
+        "$defs": {
+            "Widget": {
+                "maturity": "draft",
+                "description": "A widget with a compound conditional rule.",
+                "properties": {
+                    "kind": {"type": "string"},
+                    "size": {"type": "string"},
+                    "color": {"type": "string"},
+                },
+                "allOf": [
+                    {
+                        "if": {
+                            "properties": {
+                                "kind": {"const": "gadget"},
+                                "size": {"const": "large"},
+                            },
+                        },
+                        "then": {"properties": {"color": {"const": "red"}}},
+                    },
+                ],
+            },
+        },
+    }
+    source_fp = tmp_path / "compound-condition-source.yaml"
+    source_fp.write_text(yaml.safe_dump(source))
+    proc = YamlSchemaProcessor(source_fp)
+    rst = _render_one(proc, "Widget", tmp_path)
+    assert "**Conditional Constraints**" in rst
+    # falls back to prose, not a table -- a compound if has no single "If
+    # property.../has value..." row to contribute.
+    assert "If property..." not in rst
+    assert "If ``kind`` is ``gadget`` and ``size`` is ``large``, then:" in rst
+    assert "* ``color`` must be: ``red``" in rst
 
 
 def test_used_in_omits_transitive_subclass_enumeration_mirror(vrs_processor):
