@@ -303,8 +303,8 @@ def _describe_schema_paths(attribs: dict, path: list) -> list:
     pins down.
 
     Yields ``(dotted.path, kind, description)`` triples: ``kind`` is
-    ``"value"`` for a ``const``/``enum``/boolean-schema pin (rendered "must
-    be") or ``"type"`` for a structural narrowing resolved via
+    ``"value"`` for a ``const``/``enum``/``pattern``/bounds/boolean-schema pin
+    (rendered "must be") or ``"type"`` for a structural narrowing resolved via
     ``resolve_type`` (rendered "is narrowed to"). A property with its own
     nested ``properties`` recurses, extending the dotted path -- e.g.
     ``strength: {properties: {primaryCoding: {properties: {code:
@@ -317,19 +317,44 @@ def _describe_schema_paths(attribs: dict, path: list) -> list:
     results = []
     for name, member in attribs.get("properties", {}).items():
         new_path = path + [name]
+        dotted = ".".join(new_path)
         if isinstance(member, bool):
-            desc = "not permitted" if member is False else "permitted with any value"
-            results.append((".".join(new_path), "raw", desc))
+            desc = "is not permitted" if member is False else "is permitted with any value"
+            results.append((dotted, "raw", desc))
         elif "const" in member:
-            results.append((".".join(new_path), "value", f"``{member['const']}``"))
+            results.append((dotted, "value", f"``{member['const']}``"))
         elif "enum" in member:
             values = ", ".join(f"``{v}``" for v in member["enum"])
-            results.append((".".join(new_path), "value", f"one of: {values}"))
+            results.append((dotted, "value", f"one of: {values}"))
+        elif "pattern" in member:
+            results.append((dotted, "raw", f"must match the pattern ``{member['pattern']}``"))
         elif "properties" in member:
             results.extend(_describe_schema_paths(member, new_path))
         else:
-            results.append((".".join(new_path), "type", resolve_type(member)))
+            resolved = resolve_type(member)
+            kind = "type"
+            if resolved == "_Not Specified_":
+                # resolve_type only recognizes type/$ref/$refCurie/allOf/
+                # oneOf/anyOf -- describe whatever bound-style constraint
+                # keywords *are* present instead of leaking its internal
+                # "not specified" sentinel into rendered docs.
+                kind = "value"
+                resolved = _describe_bounds(member) or "further constrained (see source)"
+            results.append((dotted, kind, resolved))
     return results
+
+
+def _describe_bounds(member: dict) -> str:
+    """Describe numeric/length/format constraint keywords resolve_type
+    doesn't understand (it only recognizes type/$ref/$refCurie/allOf/oneOf/
+    anyOf), joined into one clause. Empty string if none are present."""
+    parts = []
+    for key in ("minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "minLength", "maxLength"):
+        if key in member:
+            parts.append(f"{key}: ``{member[key]}``")
+    if "format" in member:
+        parts.append(f"format: ``{member['format']}``")
+    return "; ".join(parts)
 
 
 def render_conditional_constraints(f, class_definition: dict) -> None:
@@ -349,7 +374,7 @@ def render_conditional_constraints(f, class_definition: dict) -> None:
     print("\n**Conditional Constraints**\n", file=f)
     for member in branches:
         condition = _describe_schema_paths(member["if"], [])
-        cond_text = " and ".join(f"``{p}`` is {d}" for p, _kind, d in condition)
+        cond_text = " and ".join(f"``{p}`` {d}" if k == "raw" else f"``{p}`` is {d}" for p, k, d in condition)
         print(f"If {cond_text or 'the condition below holds'}, then:\n", file=f)
         for branch_key, lede in (("then", None), ("else", "Otherwise")):
             branch = member.get(branch_key)
@@ -359,7 +384,8 @@ def render_conditional_constraints(f, class_definition: dict) -> None:
                 print(f"\n{lede}:\n", file=f)
             for path, kind, desc in _describe_schema_paths(branch, []):
                 if kind == "raw":
-                    print(f"* ``{path}`` is {desc}", file=f)
+                    # desc is a complete, self-contained clause (its own verb).
+                    print(f"* ``{path}`` {desc}", file=f)
                     continue
                 verb = "must be" if kind == "value" else "is narrowed to"
                 print(f"* ``{path}`` {verb}: {desc}", file=f)

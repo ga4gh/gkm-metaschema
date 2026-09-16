@@ -232,6 +232,24 @@ def test_conditional_constraints_rendered_for_if_then_allof(tmp_path):
     assert "**Conditional Constraints**" not in ampascocap_rst
 
 
+def test_conditional_constraints_pattern_narrowing_is_readable(tmp_path):
+    """resolve_type only recognizes type/$ref/$refCurie/allOf/oneOf/anyOf --
+    a then-branch that narrows a property via `pattern` (regex) instead of
+    const/enum/type falls through resolve_type's cases and used to leak its
+    internal "_Not Specified_" sentinel straight into the rendered docs.
+    VariantOncogenicityEvidenceLine's CCV methodType branches narrow
+    evidenceOutcome.primaryCoding.code this way and are a real-world
+    regression fixture for it.
+    """
+    proc = YamlSchemaProcessor(root / "data/va-spec/ccv-2022-profile-source.yaml")
+    rst = _render_one(proc, "VariantOncogenicityEvidenceLine", tmp_path)
+    assert "_Not Specified_" not in rst
+    assert (
+        "* ``evidenceOutcome.primaryCoding.code`` must match the pattern "
+        "``^(SBVS1|SBS1|OP4)(_.+)?$``"
+    ) in rst
+
+
 def test_used_in_omits_transitive_subclass_enumeration_mirror(vrs_processor):
     """Sealed Variation's auto-derived oneOf directly $refs Allele (a
     grandchild, reached transitively through the abstract MolecularVariation)

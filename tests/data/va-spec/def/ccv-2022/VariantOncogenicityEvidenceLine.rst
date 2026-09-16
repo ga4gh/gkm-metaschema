@@ -120,35 +120,35 @@ If ``directionOfEvidenceProvided`` is one of: ``supports``, ``disputes``, then:
 
 If ``specifiedBy.methodType`` is ``population_frequency``, then:
 
-* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+* ``evidenceOutcome.primaryCoding.code`` must match the pattern ``^(SBVS1|SBS1|OP4)(_.+)?$``
 
 If ``specifiedBy.methodType`` is ``functional_assay``, then:
 
-* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+* ``evidenceOutcome.primaryCoding.code`` must match the pattern ``^(OS2|SBS2)(_.+)?$``
 
 If ``specifiedBy.methodType`` is ``primary_sequence_consequence``, then:
 
-* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+* ``evidenceOutcome.primaryCoding.code`` must match the pattern ``^(OVS1|OM2|SBP2)(_.+)?$``
 
 If ``specifiedBy.methodType`` is ``functional_domain_location``, then:
 
-* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+* ``evidenceOutcome.primaryCoding.code`` must match the pattern ``^OM1(_.+)?$``
 
 If ``specifiedBy.methodType`` is ``amino_acid_or_residue_analogy``, then:
 
-* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+* ``evidenceOutcome.primaryCoding.code`` must match the pattern ``^(OS1|OM4)(_.+)?$``
 
 If ``specifiedBy.methodType`` is ``somatic_hotspot_recurrence``, then:
 
-* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+* ``evidenceOutcome.primaryCoding.code`` must match the pattern ``^(OS3|OM3|OP3)(_.+)?$``
 
 If ``specifiedBy.methodType`` is ``computational_prediction``, then:
 
-* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+* ``evidenceOutcome.primaryCoding.code`` must match the pattern ``^(OP1|SBP1)(_.+)?$``
 
 If ``specifiedBy.methodType`` is ``single_genetic_etiology_context``, then:
 
-* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+* ``evidenceOutcome.primaryCoding.code`` must match the pattern ``^OP2(_.+)?$``
 
 
 **Composes:** :ref:`EvidenceLine`

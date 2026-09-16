@@ -120,71 +120,71 @@ If ``directionOfEvidenceProvided`` is one of: ``supports``, ``disputes``, then:
 
 If ``methodType`` is ``Population Data Assessment``, then:
 
-* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+* ``evidenceOutcome.primaryCoding.code`` must match the pattern ``^(BA1|BS1|PM2)(_.+)?$``
 
 If ``methodType`` is ``Case-Control Enrichment Assessment``, then:
 
-* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+* ``evidenceOutcome.primaryCoding.code`` must match the pattern ``^(BS2|PM4)(_.+)?$``
 
 If ``methodType`` is ``Null variant assessment``, then:
 
-* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+* ``evidenceOutcome.primaryCoding.code`` must match the pattern ``^PVS1(_.+)?$``
 
 If ``methodType`` is ``Same amino acid change assessment``, then:
 
-* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+* ``evidenceOutcome.primaryCoding.code`` must match the pattern ``^PS1(_.+)?$``
 
 If ``methodType`` is ``Mutational hot spot and functional domain assessment``, then:
 
-* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+* ``evidenceOutcome.primaryCoding.code`` must match the pattern ``^PM1(_.+)?$``
 
 If ``methodType`` is ``Protein length change assessment``, then:
 
-* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+* ``evidenceOutcome.primaryCoding.code`` must match the pattern ``^(PM4|BP3)(_.+)?$``
 
 If ``methodType`` is ``Novel missense position assessment``, then:
 
-* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+* ``evidenceOutcome.primaryCoding.code`` must match the pattern ``^PM5(_.+)?$``
 
 If ``methodType`` is ``Variant spectrum assessment``, then:
 
-* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+* ``evidenceOutcome.primaryCoding.code`` must match the pattern ``^(PP2|BP1)(_.+)?$``
 
 If ``methodType`` is ``In silico functional impact assessment``, then:
 
-* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+* ``evidenceOutcome.primaryCoding.code`` must match the pattern ``^(PP3|BP4)(_.+)?$``
 
 If ``methodType`` is ``Predicted silent variant assessment``, then:
 
-* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+* ``evidenceOutcome.primaryCoding.code`` must match the pattern ``^BP7(_.+)?$``
 
 If ``methodType`` is ``Functional Data Assessment``, then:
 
-* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+* ``evidenceOutcome.primaryCoding.code`` must match the pattern ``^(PS3|BS3)(_.+)?$``
 
 If ``methodType`` is ``Segregation Data Assessment``, then:
 
-* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+* ``evidenceOutcome.primaryCoding.code`` must match the pattern ``^(PP1|BS4)(_.+)?$``
 
 If ``methodType`` is ``De Novo Data Assessment``, then:
 
-* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+* ``evidenceOutcome.primaryCoding.code`` must match the pattern ``^(PS2|PM6)(_.+)?$``
 
 If ``methodType`` is ``Cis/trans variant assessment``, then:
 
-* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+* ``evidenceOutcome.primaryCoding.code`` must match the pattern ``^(PM3|BP2)(_.+)?$``
 
 If ``methodType`` is ``Reputable Source Assessment``, then:
 
-* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+* ``evidenceOutcome.primaryCoding.code`` must match the pattern ``^(PP5|BP6)(_.+)?$``
 
 If ``methodType`` is ``Phenotype-gene specificity assessment``, then:
 
-* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+* ``evidenceOutcome.primaryCoding.code`` must match the pattern ``^PP4(_.+)?$``
 
 If ``methodType`` is ``Alternative cause assessment``, then:
 
-* ``evidenceOutcome.primaryCoding.code`` is narrowed to: _Not Specified_
+* ``evidenceOutcome.primaryCoding.code`` must match the pattern ``^BP5(_.+)?$``
 
 
 **Composes:** :ref:`EvidenceLine`
