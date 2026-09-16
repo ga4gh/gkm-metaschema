@@ -357,42 +357,142 @@ def _describe_bounds(member: dict) -> str:
     return "; ".join(parts)
 
 
+def _condition_leaf(if_schema: dict) -> tuple | None:
+    """If ``if_schema`` pins down exactly one property to a concrete value
+    (``const``/``enum``/a bounds-style keyword), return ``(dotted.path,
+    value_description)``. Returns None for anything that doesn't reduce to
+    that single "property equals value" shape -- a compound (multi-property)
+    condition, or one resolved via ``resolve_type``/a pattern/boolean-schema
+    pin -- which reads more naturally as prose than as a table row.
+    """
+    leaves = _describe_schema_paths(if_schema, [])
+    if len(leaves) != 1:
+        return None
+    path, kind, desc = leaves[0]
+    if kind != "value":
+        return None
+    return path, desc
+
+
+def _must_phrase(kind: str, desc: str) -> str:
+    """Render a then/else leaf's (kind, description) as the verb phrase for
+    the **must...** table column, e.g. "have value ``X``", "match the
+    pattern ``Y``", "not be provided"."""
+    if kind == "raw":
+        if desc == "is not permitted":
+            return "not be provided"
+        if desc == "is permitted with any value":
+            return "be provided, with any value"
+        # e.g. "must match the pattern ``X``" -> "match the pattern ``X``"
+        return desc.removeprefix("must ")
+    if kind == "value":
+        return f"have value {desc}" if desc.startswith("``") else f"have {desc}"
+    # kind == "type": a structural narrowing resolved via resolve_type.
+    if " | " in desc:
+        return f"be one of: {desc.replace(' | ', ', ')}"
+    return f"be narrowed to: {desc}"
+
+
+def _consequence_rows(branch: dict) -> list:
+    """Table rows -- (dotted.path, must_phrase) -- for a then/else branch:
+    one per leaf constraint, plus one per ``required`` entry that has no
+    constraint of its own (bare presence, e.g. ``required: [strength]`` with
+    no narrowing on ``strength`` itself)."""
+    rows = []
+    leaves = _describe_schema_paths(branch, [])
+    covered = [path for path, _kind, _desc in leaves]
+    for path, kind, desc in leaves:
+        rows.append((path, _must_phrase(kind, desc)))
+    for name in branch.get("required", []):
+        if not any(p == name or p.startswith(name + ".") for p in covered):
+            rows.append((name, "be provided"))
+    return rows
+
+
+def _render_conditional_prose(f, member: dict) -> None:
+    """Render one allOf `if`/`then`/`else` member as prose bullets -- the
+    general fallback for a condition/consequence shape that doesn't reduce
+    to a single "property equals value" table row (see _condition_leaf)."""
+    condition = _describe_schema_paths(member["if"], [])
+    cond_text = " and ".join(f"``{p}`` {d}" if k == "raw" else f"``{p}`` is {d}" for p, k, d in condition)
+    print(f"If {cond_text or 'the condition below holds'}, then:\n", file=f)
+    for branch_key, lede in (("then", None), ("else", "Otherwise")):
+        branch = member.get(branch_key)
+        if not branch:
+            continue
+        if lede:
+            print(f"\n{lede}:\n", file=f)
+        for path, kind, desc in _describe_schema_paths(branch, []):
+            if kind == "raw":
+                # desc is a complete, self-contained clause (its own verb).
+                print(f"* ``{path}`` {desc}", file=f)
+                continue
+            verb = "must be" if kind == "value" else "is narrowed to"
+            print(f"* ``{path}`` {verb}: {desc}", file=f)
+        if branch.get("required"):
+            req = ", ".join(f"``{r}``" for r in branch["required"])
+            print(f"* Required: {req}", file=f)
+    print(file=f)
+
+
 def render_conditional_constraints(f, class_definition: dict) -> None:
     """Render allOf `if`/`then`/`else` members -- business-rule-style
     conditional narrowing (e.g. AMP/ASCO/CAP tier-dependent constraints) --
-    as prose bullets under a **Conditional Constraints** heading.
+    under a **Conditional Constraints** heading.
 
     `flatten_allof` only understands a base `$ref` or a flat `properties`
     member; an `if`/`then` member has neither at its own top level (the
     condition/consequence properties are nested one level deeper), so it's
     silently skipped by the main Information Model table. Without this,
     conditional rules were entirely invisible in the rendered docs.
+
+    A member whose condition reduces to a single "property equals value" pin
+    (the common case -- e.g. AMP/ASCO/CAP's tier-/methodType-keyed rules) is
+    collected into one **If property... / has value... / then property... /
+    must...** table, one row per consequence -- flatter and easier to scan
+    than prose when a class has many such branches. Anything that doesn't
+    reduce that way (a compound condition, an `else`, or a condition pinned
+    via a structural/pattern/boolean-schema constraint rather than a plain
+    value) falls back to the previous prose rendering.
     """
     branches = [m for m in class_definition.get("allOf", []) if "if" in m]
     if not branches:
         return
-    print("\n**Conditional Constraints**\n", file=f)
+    table_rows = []
+    prose_members = []
     for member in branches:
-        condition = _describe_schema_paths(member["if"], [])
-        cond_text = " and ".join(f"``{p}`` {d}" if k == "raw" else f"``{p}`` is {d}" for p, k, d in condition)
-        print(f"If {cond_text or 'the condition below holds'}, then:\n", file=f)
-        for branch_key, lede in (("then", None), ("else", "Otherwise")):
-            branch = member.get(branch_key)
-            if not branch:
-                continue
-            if lede:
-                print(f"\n{lede}:\n", file=f)
-            for path, kind, desc in _describe_schema_paths(branch, []):
-                if kind == "raw":
-                    # desc is a complete, self-contained clause (its own verb).
-                    print(f"* ``{path}`` {desc}", file=f)
-                    continue
-                verb = "must be" if kind == "value" else "is narrowed to"
-                print(f"* ``{path}`` {verb}: {desc}", file=f)
-            if branch.get("required"):
-                req = ", ".join(f"``{r}``" for r in branch["required"])
-                print(f"* Required: {req}", file=f)
+        leaf = None if "else" in member else _condition_leaf(member["if"])
+        rows = _consequence_rows(member.get("then", {})) if leaf else []
+        if leaf is None or not rows:
+            prose_members.append(member)
+            continue
+        if_path, has_value = leaf
+        table_rows.extend((if_path, has_value, then_path, must) for then_path, must in rows)
+    print("\n**Conditional Constraints**\n", file=f)
+    if table_rows:
+        print(
+            """.. list-table::
+   :class: clean-wrap
+   :header-rows: 1
+   :align: left
+   :widths: auto
+
+   *  - If property...
+      - has value...
+      - then property...
+      - must...""",
+            file=f,
+        )
+        for if_path, has_value, then_path, must in table_rows:
+            row = f"""\
+   *  - ``{if_path}``
+      - {has_value}
+      - ``{then_path}``
+      - {must}"""
+            print(row, file=f)
         print(file=f)
+    for member in prose_members:
+        _render_conditional_prose(f, member)
 
 
 def render_information_model(f, properties: dict, required: list, note: str = "") -> None:
