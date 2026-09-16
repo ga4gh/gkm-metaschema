@@ -264,6 +264,37 @@ def test_conditional_constraints_pattern_narrowing_is_readable(tmp_path):
     ) in rst
 
 
+def test_acmg_2015_methodtype_condition_is_nested_under_specifiedby(tmp_path):
+    """VariantPathogenicityEvidenceLine's methodType-keyed if/then branches
+    previously checked a bare top-level `methodType` property. methodType
+    only exists on the Method class (specifiedBy: oneOf: [Method,
+    iriReference]) -- not on VariantPathogenicityEvidenceLine or any of its
+    ancestors (EvidenceLine, InformationEntity) -- so `required: [methodType]`
+    in the if-condition could never be satisfied by a conforming instance
+    (specifiedBy.methodType is never a top-level key): every one of the 17
+    tier-specific branches was dead/unreachable in validation. Fixed to nest
+    under specifiedBy.methodType, matching ccv-2022's identical pattern.
+    """
+    proc = YamlSchemaProcessor(root / "data/va-spec/acmg-2015-profile-source.yaml")
+    class_def = proc.processed_schema[proc.schema_def_keyword]["VariantPathogenicityEvidenceLine"]
+    methodtype_branches = [
+        m for m in class_def["allOf"] if "if" in m and "specifiedBy" in m["if"].get("properties", {})
+    ]
+    assert len(methodtype_branches) == 17
+    for member in methodtype_branches:
+        condition = member["if"]
+        assert condition["required"] == ["specifiedBy"]
+        specified_by = condition["properties"]["specifiedBy"]
+        assert specified_by["required"] == ["methodType"]
+        assert "const" in specified_by["properties"]["methodType"]
+        # no branch's condition left a bare top-level `methodType` behind.
+        assert "methodType" not in condition["properties"]
+
+    rst = _render_one(proc, "VariantPathogenicityEvidenceLine", tmp_path)
+    assert "``specifiedBy.methodType``" in rst
+    assert "``methodType``\n" not in rst
+
+
 def test_conditional_constraints_complex_condition_falls_back_to_prose(tmp_path):
     """A condition that isn't a single "property equals value" pin -- here, a
     compound (multi-property) `if` -- doesn't reduce to a table row, so it
