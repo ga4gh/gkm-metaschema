@@ -409,6 +409,50 @@ sealed class's *own* emitted schema gains the `oneOf`.
 
 ---
 
+## 11. iriReference-preservation warnings (`LostIriReferenceWarning`)
+
+A property whose schema offers `iriReference` as an alternative (e.g.
+`specifiedBy: oneOf: [Method, iriReference]`) means "this can be a concrete
+object, or an external reference to one." When a descendant/composing class
+narrows that property, it's easy to accidentally narrow away the
+`iriReference` alternative — leaving only the concrete type — without
+noticing, since a narrower schema is still a *valid* narrowing in the schema
+covariance sense (see [§3](#3-property-specialization--schema-covariance-no-renaming-extends-removed)),
+so nothing here fails processing. The processor now emits a
+`LostIriReferenceWarning` ([`warnings.warn`](https://docs.python.org/3/library/warnings.html),
+not an error) whenever it detects this, covering both narrowing mechanisms:
+
+- **`inherits:`.** The processor already merges a parent's property with the
+  child's override into one effective schema (see [§3](#3-property-specialization--schema-covariance-no-renaming-extends-removed)).
+  If the property offered `iriReference` before the child's override is
+  applied but not after, it warns.
+- **`allOf` composition.** Unlike `inherits:`, a composed class's local
+  `properties` override is **not** merged with its composed base at the
+  source level — the emitted schema keeps every `allOf` member as its own
+  separate constraint (see [§1](#1-class-model)). JSON Schema's `allOf`
+  applies all of them **simultaneously** (intersection): an instance's
+  property value must satisfy the composed base's schema *and* the local
+  override's schema at once. A local override that narrows to a bare
+  concrete type therefore silently excludes `iriReference` regardless of
+  what the composed base allows — a real bug found this way: `aac-2017`'s,
+  `acmg-2015`'s, and `ccv-2022`'s `proposition` narrowings (composing
+  `va.core:Statement`, whose `proposition` offers `iriReference`) each
+  excluded it via a bare `$refCurie` override. The check resolves a
+  composed base's *effective* properties recursively (through its own
+  `allOf`/`inherits`, mirroring but not sharing code with `y2t.py`'s
+  `flatten_allof`) so it also catches the case through a multi-level
+  composition chain.
+
+A description-only override (no `$ref`/`$refCurie`/`oneOf`/`anyOf`/`type`
+key) never triggers this — it doesn't change what the property accepts, so
+there's nothing to lose. This is deliberately a **warning, not an error**:
+excluding `iriReference` in a narrowing is sometimes intentional (e.g. a
+profile that genuinely wants to forbid external references for a specific
+property), so the processor flags it for review rather than blocking the
+build.
+
+---
+
 ## Known limitations
 
 - **No source-attribute validation.** The processor is a transform, not a
@@ -547,3 +591,13 @@ Behaviors intentionally **removed / changed** during the migration:
   *italics* and concrete values/patterns in **bold**, replacing the uniform
   ``code`` literal styling used for both — easier to tell "what property"
   from "what value" at a glance (see [§8](#8-outputs)).
+- **`LostIriReferenceWarning` added** (see [§11](#11-irireference-preservation-warnings-lostirireferencewarning)),
+  a non-fatal `warnings.warn` the processor now emits whenever a narrowing
+  (`inherits:` or `allOf` composition) drops an `iriReference` alternative a
+  parent/composed base offered. Found by inspection, not by the new check
+  itself (which didn't exist yet): `Statement.proposition`'s three profile
+  narrowings each excluded `iriReference` via `allOf`'s intersection
+  semantics, even after the base was fixed to offer it. The check exists so
+  this class of bug — schema-covariance-valid, so nothing else catches it —
+  gets flagged automatically going forward instead of relying on manual
+  audits.
