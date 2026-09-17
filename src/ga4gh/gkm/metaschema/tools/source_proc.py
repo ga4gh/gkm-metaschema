@@ -4,6 +4,7 @@
 import copy
 import json
 import re
+import warnings
 from collections import defaultdict
 from pathlib import Path
 from urllib.parse import urlparse
@@ -25,6 +26,47 @@ curie_re = re.compile(r"(\S+):(\S+)")
 defs_re = re.compile(r"#/(\$defs|definitions)/.*")
 
 maturity_levels = {"deprecated": 0, "draft": 1, "trial use": 2, "normative": 3}
+
+
+class LostIriReferenceWarning(UserWarning):
+    """A property that a parent or composed base declares as
+    iriReference-capable (``oneOf``/``anyOf`` including a reference to
+    ``iriReference``) gets narrowed, by an inheriting or composing class's
+    own override, to a schema that no longer offers that alternative."""
+
+
+def _ref_or_curie_target(node) -> str | None:
+    """Bare class name a ``$ref``/``$refCurie`` value points at, or None."""
+    if not isinstance(node, dict):
+        return None
+    ref = node.get("$ref") or node.get("$refCurie")
+    if not ref:
+        return None
+    frag = ref.split("#")[-1]  # drop any JSON-pointer fragment
+    name = frag.rsplit("/", 1)[-1]  # last path segment
+    return name.rsplit(":", 1)[-1] or None  # strip a CURIE namespace prefix
+
+
+def _schema_offers_irireference(node) -> bool:
+    """Recursively check whether a property schema fragment includes
+    ``iriReference`` as an alternative anywhere within it -- a
+    ``$ref``/``$refCurie`` that resolves to a class literally named
+    ``iriReference``, at any nesting depth (e.g. inside a ``oneOf``/``anyOf``,
+    or under ``items`` for an array property)."""
+    if isinstance(node, dict):
+        if _ref_or_curie_target(node) == "iriReference":
+            return True
+        return any(_schema_offers_irireference(v) for v in node.values())
+    if isinstance(node, list):
+        return any(_schema_offers_irireference(item) for item in node)
+    return False
+
+
+def _has_type_narrowing_keys(schema) -> bool:
+    """True if ``schema`` actually redefines a property's type (as opposed
+    to e.g. a description-only override, which doesn't affect what the
+    property accepts)."""
+    return isinstance(schema, dict) and any(k in schema for k in ("$ref", "$refCurie", "oneOf", "anyOf", "type"))
 
 
 class YamlSchemaProcessor:
@@ -541,6 +583,105 @@ class YamlSchemaProcessor:
             revised_path = base.joinpath(export_key, class_ref)
         return str(revised_path)
 
+    def _class_registry_for_lost_irireference_check(self) -> dict:
+        """Map class name -> (raw_def, owning_processor), across this
+        processor and its transitive imports. Class names are assumed
+        unique across the whole merged system. Used only by the
+        LostIriReferenceWarning check below -- kept self-contained here
+        (deliberately not shared with y2t.py's own _class_registry) so this
+        check has no dependency on the rendering module."""
+        cached = getattr(self, "_lost_irireference_registry", None)
+        if cached is not None:
+            return cached
+        registry: dict = {}
+
+        def collect(proc, seen):
+            if id(proc) in seen:
+                return
+            seen.add(id(proc))
+            for name, raw_def in (proc.raw_defs or {}).items():
+                registry.setdefault(name, (raw_def, proc))
+            for imported in proc.imports.values():
+                collect(imported, seen)
+
+        collect(self, set())
+        self._lost_irireference_registry = registry
+        return registry
+
+    def _effective_raw_properties(self, class_name: str, _seen: frozenset = frozenset()) -> dict:
+        """Resolve a class's effective property set -- its own top-level
+        ``properties``, overlaid with whatever an ``allOf``-composed base or
+        ``inherits`` parent contributes, recursively -- for the
+        LostIriReferenceWarning check only. Mirrors (without sharing code
+        with) y2t.py's ``flatten_allof``/inheritance-merge; ``_seen`` guards
+        against a cyclic chain."""
+        registry = self._class_registry_for_lost_irireference_check()
+        if class_name in _seen or class_name not in registry:
+            return {}
+        raw_def, _owner = registry[class_name]
+        effective = dict(raw_def.get("properties", {}))
+        inherits = raw_def.get("inherits")
+        if isinstance(inherits, str):
+            parent_name = inherits.rsplit(":", 1)[-1]
+            for name, schema in self._effective_raw_properties(parent_name, _seen | {class_name}).items():
+                effective.setdefault(name, schema)
+        for member in raw_def.get("allOf", []):
+            if not isinstance(member, dict):
+                continue
+            base_name = _ref_or_curie_target(member)
+            if base_name:
+                for name, schema in self._effective_raw_properties(base_name, _seen | {class_name}).items():
+                    effective.setdefault(name, schema)
+            if "properties" in member:
+                effective.update(member["properties"])
+        return effective
+
+    def _warn_on_lost_irireference_in_composition(self, schema_class: str, raw_class_def: dict) -> None:
+        """Warn if a property this class composes in via ``allOf`` from a
+        base that offers ``iriReference`` for it gets narrowed, by a local
+        ``properties`` override in the same ``allOf`` list, to a schema that
+        no longer offers it.
+
+        Unlike ``inherits:`` (where the processor merges parent and child
+        into one effective property, checked in ``process_schema_class``
+        above), an ``allOf``-composed class keeps every member as its own
+        separate constraint in the emitted schema. JSON Schema's ``allOf``
+        applies all of them simultaneously (intersection): an instance's
+        property value must satisfy the composed base's schema *and* the
+        local override's schema at once. A local override that narrows to a
+        bare concrete type therefore silently excludes ``iriReference``
+        regardless of what the composed base allows -- nothing here fails
+        validation (the override is still a legal narrowing), so this is
+        easy to introduce and easy to miss in review without a check.
+        """
+        base_props: dict = {}
+        local_overrides: dict = {}
+        for member in raw_class_def.get("allOf", []):
+            if not isinstance(member, dict):
+                continue
+            base_name = _ref_or_curie_target(member)
+            if base_name:
+                for name, schema in self._effective_raw_properties(base_name).items():
+                    base_props.setdefault(name, schema)
+            if "properties" in member:
+                local_overrides.update(member["properties"])
+        for prop, override_schema in local_overrides.items():
+            if prop not in base_props or not _has_type_narrowing_keys(override_schema):
+                continue
+            if _schema_offers_irireference(base_props[prop]) and not _schema_offers_irireference(override_schema):
+                warnings.warn(
+                    f"'{schema_class}.{prop}' composes a base that offers 'iriReference' "
+                    "for this property, but this class's own narrowing no longer does "
+                    "(JSON Schema's allOf intersects every member's constraints, so this "
+                    "silently excludes iriReference regardless of what the base allows). "
+                    "Fix: add iriReference back as an alternative in the local override "
+                    "(e.g. 'oneOf: [<narrowed-type>, iriReference]') if external "
+                    "references should still be permitted here, or disregard if excluding "
+                    "it here is intentional.",
+                    LostIriReferenceWarning,
+                    stacklevel=2,
+                )
+
     def process_schema_class(self, schema_class):
         raw_class_def = self.raw_schema[self.schema_def_keyword][schema_class]
         if schema_class in self.processed_classes:
@@ -622,6 +763,8 @@ class YamlSchemaProcessor:
         for key in ("allOf", "anyOf", "oneOf"):
             if key in raw_class_def:
                 self.process_property_tree_refs(raw_class_def[key], processed_class_def[key])
+        if "allOf" in raw_class_def:
+            self._warn_on_lost_irireference_in_composition(schema_class, raw_class_def)
 
         specialized = []
         for prop, prop_attribs in processed_class_properties.items():
@@ -663,6 +806,7 @@ class YamlSchemaProcessor:
                             f"'{guarded}', define '{prop}' as a new property rather than "
                             "inheriting it."
                         )
+                had_irireference = _schema_offers_irireference(merged)
                 # reconcile polymorphic refs when the subclass narrows the type
                 if "$ref" in prop_attribs:
                     merged.pop("oneOf", None)
@@ -670,6 +814,17 @@ class YamlSchemaProcessor:
                 if "oneOf" in prop_attribs or "anyOf" in prop_attribs:
                     merged.pop("$ref", None)
                 merged.update(prop_attribs)
+                if had_irireference and not _schema_offers_irireference(merged):
+                    warnings.warn(
+                        f"'{schema_class}.{prop}' narrows an inherited property that "
+                        "offered 'iriReference' as an alternative, but this class's own "
+                        "override no longer does. Fix: add iriReference back as an "
+                        "alternative (e.g. 'oneOf: [<narrowed-type>, iriReference]') if "
+                        "external references should still be permitted here, or "
+                        "disregard if excluding it here is intentional.",
+                        LostIriReferenceWarning,
+                        stacklevel=2,
+                    )
                 specialized.append(prop)
             # Validate required array attribute for GKS specs
             if self.enforce_ordered and prop_attribs.get("type", "") == "array":
