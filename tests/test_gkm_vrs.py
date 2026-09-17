@@ -425,6 +425,47 @@ def test_flatten_allof_recurses_through_composed_base(tmp_path):
     assert "strengthOfEvidenceProvided" in rst
 
 
+def test_statement_proposition_retains_irireference(tmp_path):
+    """Statement.proposition (va-core) was a bare `$ref: Proposition`, unlike
+    its sibling relationship properties (specifiedBy, reportedIn,
+    hasEvidenceLines, ...), which all offer `oneOf: [X, iriReference]` --
+    Propositions should be externally referenceable too. Each profile's own
+    local `proposition` narrowing (a bare $refCurie to a concrete
+    Proposition subtype) then compounded the gap: for an allOf-composed
+    class, JSON Schema's allOf semantics require an instance to satisfy
+    *every* allOf member simultaneously, so even after adding iriReference
+    to the base, a profile-level override that's still a bare $refCurie
+    would silently exclude iriReference again (an iriReference object can't
+    also validate as e.g. VariantPathogenicityProposition). Every
+    iriReference-capable attribute must retain that option end-to-end:
+    both the base and each profile's narrowing need their own explicit
+    `oneOf: [ConcreteProposition, iriReference]`.
+    """
+    va_core = YamlSchemaProcessor(root / "data/va-spec/va-core-source.yaml")
+    statement_def = va_core.processed_schema[va_core.schema_def_keyword]["Statement"]
+    assert {"$ref", "$refCurie"} & set(statement_def["properties"]["proposition"]) == set()
+    prop_oneof = statement_def["properties"]["proposition"]["oneOf"]
+    assert any(m.get("$ref", "").endswith("/Proposition") for m in prop_oneof)
+    assert any(m.get("$ref", "").endswith("/iriReference") for m in prop_oneof)
+
+    cases = [
+        ("aac-2017-profile-source.yaml", "VariantClinicalSignificanceStatement", "VariantClinicalSignificanceProposition"),
+        ("acmg-2015-profile-source.yaml", "VariantPathogenicityStatement", "VariantPathogenicityProposition"),
+        ("ccv-2022-profile-source.yaml", "VariantOncogenicityStatement", "VariantOncogenicityProposition"),
+    ]
+    for source_name, class_name, proposition_name in cases:
+        proc = YamlSchemaProcessor(root / f"data/va-spec/{source_name}")
+        class_def = proc.processed_schema[proc.schema_def_keyword][class_name]
+        local_override = class_def["allOf"][1]["properties"]["proposition"]
+        assert "oneOf" in local_override, f"{class_name}.proposition is a bare $ref -- excludes iriReference via allOf intersection"
+        member_refs = [m.get("$ref", "") for m in local_override["oneOf"]]
+        assert any(r.endswith(f"/{proposition_name}") for r in member_refs)
+        assert any(r.endswith("/iriReference") for r in member_refs)
+
+        rst = _render_one(proc, class_name, tmp_path)
+        assert f":ref:`{proposition_name}` | :ref:`iriReference`" in rst
+
+
 def _generate_outputs(proc, clean=True):
     """Write the per-class json/ split schemas and def/ .rst docs for a schema.
 
