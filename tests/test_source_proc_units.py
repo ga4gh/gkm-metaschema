@@ -6,9 +6,12 @@ predicates under the abstract/concrete convention, and the additionalProperties
 policy (open on abstract, closed on strict concrete classes).
 """
 
+import warnings
+
 import pytest
 import yaml
 
+from ga4gh.gkm.metaschema.tools.source_proc import LostIriReferenceWarning
 from ga4gh.gkm.metaschema.tools.source_proc import YamlSchemaProcessor
 
 
@@ -420,3 +423,125 @@ def test_sealed_resolution_is_idempotent_across_reprocessing(tmp_path):
     proc.merge_imported()  # re-invokes _init_from_raw on the same instance
     after = proc.for_js["$defs"]["Shape"]["oneOf"]
     assert after == before == [{"$ref": "#/$defs/Circle"}, {"$ref": "#/$defs/Square"}]
+
+
+# _build_sealed_schema is a generic minimal-schema builder despite its name
+# (just wraps a $defs dict) -- reused below for the LostIriReferenceWarning tests.
+
+
+def _irireference_narrowing_defs(override):
+    """Minimal Parent(abstract)/Widget/iriReference/Child hierarchy: Parent.thing
+    offers iriReference; Child narrows 'thing' to ``override`` via inherits."""
+    return {
+        "Parent": {
+            "maturity": "draft",
+            "abstract": True,
+            "description": "An abstract parent offering iriReference for 'thing'.",
+            "properties": {
+                "thing": {"oneOf": [{"$ref": "#/$defs/Widget"}, {"$ref": "#/$defs/iriReference"}]},
+            },
+        },
+        "Widget": {"maturity": "draft", "description": "A concrete widget."},
+        "iriReference": {"maturity": "draft", "description": "An external reference."},
+        "Child": {
+            "maturity": "draft",
+            "inherits": "Parent",
+            "description": "A concrete child narrowing 'thing'.",
+            "properties": {"thing": override},
+        },
+    }
+
+
+def test_inherited_irireference_narrowed_away_warns(tmp_path):
+    """A subclass narrowing an inherited property that offered iriReference
+    to a schema that no longer does -- warns, since a conforming instance
+    can no longer use an external reference for that property even though
+    the parent class says it should be able to.
+    """
+    defs = _irireference_narrowing_defs({"$ref": "#/$defs/Widget"})
+    with pytest.warns(LostIriReferenceWarning, match="Child.thing"):
+        _build_sealed_schema(tmp_path, defs)
+
+
+def test_inherited_irireference_retained_does_not_warn(tmp_path):
+    """A subclass that re-offers iriReference alongside its narrowed type
+    does not warn -- the capability is preserved, just narrowed."""
+    override = {"oneOf": [{"$ref": "#/$defs/Widget"}, {"$ref": "#/$defs/iriReference"}]}
+    defs = _irireference_narrowing_defs(override)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _build_sealed_schema(tmp_path, defs)
+    assert not any(issubclass(w.category, LostIriReferenceWarning) for w in caught)
+
+
+def test_inherited_description_only_override_does_not_warn(tmp_path):
+    """A subclass override that only refines the description (no type-
+    narrowing keys) doesn't touch the inherited oneOf at all -- the merge
+    keeps it, so there's nothing to warn about."""
+    defs = _irireference_narrowing_defs({"description": "a more specific description"})
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _build_sealed_schema(tmp_path, defs)
+    assert not any(issubclass(w.category, LostIriReferenceWarning) for w in caught)
+
+
+def _irireference_composition_defs(override):
+    """Minimal Base/Widget/iriReference/Composed hierarchy: Base.thing offers
+    iriReference; Composed narrows 'thing' to ``override`` via its own local
+    allOf properties member (composition, not inherits)."""
+    return {
+        "Base": {
+            "maturity": "draft",
+            "description": "A base class offering iriReference for 'thing'.",
+            "properties": {
+                "thing": {"oneOf": [{"$ref": "#/$defs/Widget"}, {"$ref": "#/$defs/iriReference"}]},
+            },
+        },
+        "Widget": {"maturity": "draft", "description": "A concrete widget."},
+        "iriReference": {"maturity": "draft", "description": "An external reference."},
+        "Composed": {
+            "maturity": "draft",
+            "description": "A class composing Base and narrowing 'thing'.",
+            "allOf": [
+                {"$ref": "#/$defs/Base"},
+                {"properties": {"thing": override}},
+            ],
+        },
+    }
+
+
+def test_composed_irireference_narrowed_away_warns(tmp_path):
+    """An allOf-composed class's own local override of a property its
+    composed base offers iriReference for -- narrowed to a bare ref --
+    warns. Unlike the inherits case, this isn't merged by the processor at
+    all: the emitted schema keeps both allOf members as separate,
+    simultaneously-applied constraints, so the local override silently
+    excludes iriReference regardless of what the base allows (real
+    regression fixture: Statement.proposition composed into
+    VariantPathogenicityStatement, see PR #86).
+    """
+    defs = _irireference_composition_defs({"$ref": "#/$defs/Widget"})
+    with pytest.warns(LostIriReferenceWarning, match="Composed.thing"):
+        _build_sealed_schema(tmp_path, defs)
+
+
+def test_composed_irireference_retained_does_not_warn(tmp_path):
+    """A composed class that re-offers iriReference alongside its narrowed
+    type in its own local override does not warn."""
+    override = {"oneOf": [{"$ref": "#/$defs/Widget"}, {"$ref": "#/$defs/iriReference"}]}
+    defs = _irireference_composition_defs(override)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _build_sealed_schema(tmp_path, defs)
+    assert not any(issubclass(w.category, LostIriReferenceWarning) for w in caught)
+
+
+def test_composed_description_only_override_does_not_warn(tmp_path):
+    """A composed class's local override that only refines the description
+    (no type-narrowing keys) doesn't change what the base's schema for that
+    property allows -- nothing to warn about."""
+    defs = _irireference_composition_defs({"description": "a more specific description"})
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _build_sealed_schema(tmp_path, defs)
+    assert not any(issubclass(w.category, LostIriReferenceWarning) for w in caught)
