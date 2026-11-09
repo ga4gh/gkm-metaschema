@@ -297,7 +297,9 @@ def flatten_allof(class_definition: dict, proc: YamlSchemaProcessor, _seen: froz
 
     A property narrowed to the boolean schema ``false`` (forbidden) stays in the
     effective set as ``False``, so a class composing this one still sees it as
-    forbidden; ``render_information_model`` leaves it out of the table.
+    forbidden; ``render_information_model`` leaves it out of the table. A
+    ``false`` from any referenced base wins over another base's schema for the
+    same property, regardless of the order the bases are listed in.
     """
     registry = _class_registry(proc)
     effective: dict = {}
@@ -311,7 +313,13 @@ def flatten_allof(class_definition: dict, proc: YamlSchemaProcessor, _seen: froz
             else:
                 base_effective, base_required = base.get("properties", {}), base.get("required", [])
             for name, attribs in base_effective.items():
-                effective.setdefault(name, attribs)
+                # allOf is a conjunction: a property any referenced base
+                # forbids stays forbidden whatever order the bases appear in
+                # (reassigning an existing key keeps its position).
+                if attribs is False:
+                    effective[name] = False
+                else:
+                    effective.setdefault(name, attribs)
             required.update(base_required)
         if "properties" in member:
             for name, attribs in member["properties"].items():

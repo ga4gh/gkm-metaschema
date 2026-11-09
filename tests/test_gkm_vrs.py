@@ -459,6 +459,62 @@ def test_allof_property_narrowed_to_false_is_omitted(tmp_path):
         assert "   *  - name\n" not in rst
 
 
+@pytest.mark.parametrize("narrow_first", [False, True], ids=["Coding-first", "NarrowCoding-first"])
+def test_allof_false_from_any_referenced_base_is_omitted(tmp_path, narrow_first):
+    """allOf is a conjunction, so a property one referenced base forbids
+    (``false``) stays forbidden whatever order the bases are listed in.
+    flatten_allof merged referenced bases with setdefault (first base wins),
+    so with Coding listed before NarrowCoding, Coding's ``id`` schema
+    displaced NarrowCoding's ``false`` and ``id`` was rendered again.
+    """
+    coding_ref = {"$ref": "#/$defs/Coding"}
+    members = [coding_ref, {"$ref": "#/$defs/NarrowCoding"}]
+    if narrow_first:
+        members.reverse()
+    schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://example.org/schema/narrow/narrow-source.yaml",
+        "title": "Narrow",
+        "type": "object",
+        "$defs": {
+            "Coding": {
+                "maturity": "draft",
+                "description": "A coding.",
+                "properties": {
+                    "id": {"type": "string", "description": "The id."},
+                    "code": {"type": "string", "description": "The code."},
+                    "system": {"type": "string", "description": "The system."},
+                },
+                "required": ["code"],
+            },
+            "NarrowCoding": {
+                "maturity": "draft",
+                "description": "A Coding with no id.",
+                "allOf": [coding_ref, {"type": "object", "properties": {"id": False}}],
+            },
+            "BothCoding": {
+                "maturity": "draft",
+                "description": "Composes Coding and NarrowCoding.",
+                "allOf": members,
+            },
+        },
+    }
+    fp = tmp_path / "narrow-source.yaml"
+    fp.write_text(yaml.safe_dump(schema))
+    proc = YamlSchemaProcessor(fp)
+    defs = proc.processed_schema[proc.schema_def_keyword]
+
+    effective, _required = flatten_allof(defs["BothCoding"], proc)
+    assert effective["id"] is False
+    assert effective["code"] == {"type": "string", "description": "The code."}
+    # forbidding id keeps every property in the base's order
+    assert list(effective) == list(defs["Coding"]["properties"])
+
+    rst = _render_one(proc, "BothCoding", tmp_path)
+    assert "   *  - id\n" not in rst
+    assert rst.index("   *  - code\n") < rst.index("   *  - system\n")
+
+
 def test_flatten_allof_recurses_through_composed_base(tmp_path):
     """flatten_allof only read a referenced base's top-level `properties` --
     a single level. DiagnosticEvidenceLine's allOf base, AmpAscoCapEvidenceLine,
