@@ -655,3 +655,29 @@ def test_composed_property_forbidden_with_false_does_not_warn(tmp_path):
     an intentional removal, not an accidental loss of iriReference."""
     defs = _irireference_composition_defs(False)
     assert _lost_irireference_warnings(tmp_path, defs) == []
+
+
+def test_inherited_ref_override_keeps_key_position(tmp_path):
+    """A subclass replacing an inherited $ref with its own $ref (plus a new
+    description) keeps $ref where the parent had it, so specialization
+    doesn't reorder keys in the emitted schema."""
+    defs = {
+        "Parent": {
+            "maturity": "draft",
+            "abstract": True,
+            "description": "An abstract parent.",
+            "properties": {"thing": {"$ref": "#/$defs/Widget", "description": "A thing."}},
+        },
+        "Widget": {"maturity": "draft", "description": "A concrete widget."},
+        "Gadget": {"maturity": "draft", "inherits": "Widget", "description": "A narrower widget."},
+        "Child": {
+            "maturity": "draft",
+            "inherits": "Parent",
+            "description": "A concrete child.",
+            "properties": {"thing": {"description": "A gadget.", "$ref": "#/$defs/Gadget"}},
+        },
+    }
+    proc = _build_sealed_schema(tmp_path, defs)
+    thing = proc.for_js["$defs"]["Child"]["properties"]["thing"]
+    assert list(thing) == ["$ref", "description"]
+    assert thing["$ref"].endswith("Gadget")

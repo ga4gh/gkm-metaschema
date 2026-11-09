@@ -68,9 +68,15 @@ def _merge_inherited_property(merged: dict, override: dict) -> None:
     the inherited ``oneOf``/``anyOf`` (and vice versa), then the override's
     keys win. Annotation-only keys (description, $comment, ...) leave the
     inherited constraints in place."""
+    # Pop only the keys the override does not itself set, so an inherited
+    # $ref the override replaces keeps its position in the emitted schema.
     if "$ref" in override or "$refCurie" in override:
-        for key in ("oneOf", "anyOf", "$ref", "$refCurie"):
-            merged.pop(key, None)
+        merged.pop("oneOf", None)
+        merged.pop("anyOf", None)
+    if "$ref" in override:
+        merged.pop("$refCurie", None)
+    if "$refCurie" in override:
+        merged.pop("$ref", None)
     if "oneOf" in override or "anyOf" in override:
         merged.pop("$ref", None)
         merged.pop("$refCurie", None)
