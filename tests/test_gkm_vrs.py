@@ -583,6 +583,8 @@ def test_allof_bases_keep_both_constraints(tmp_path, first_listed):
     assert effective["code"]["maxLength"] == 8
 
 
+# narrowing 'thing' to a bare type is intended here
+@pytest.mark.filterwarnings("ignore::ga4gh.gkm.metaschema.tools.source_proc.LostIriReferenceWarning")
 @_BOTH_ORDERS
 def test_allof_bases_narrower_type_wins(tmp_path, first_listed):
     """One base narrows 'thing' to Widget; the other only refines its
@@ -594,6 +596,8 @@ def test_allof_bases_narrower_type_wins(tmp_path, first_listed):
     assert resolve_type(effective["thing"]) == ":ref:`Widget`"
 
 
+# narrowing 'thing' to a bare type is intended here
+@pytest.mark.filterwarnings("ignore::ga4gh.gkm.metaschema.tools.source_proc.LostIriReferenceWarning")
 @_BOTH_ORDERS
 def test_allof_bases_conflicting_types_both_shown(tmp_path, first_listed):
     """Bases narrowing 'thing' to unrelated types must both hold, so the Type
@@ -647,6 +651,32 @@ def test_allof_bases_contains_both_shown(tmp_path, first_listed):
     rendered = resolve_type(effective["things"])
     assert ":ref:`Widget`" in rendered
     assert ":ref:`Gadget`" in rendered
+
+
+@_BOTH_ORDERS
+def test_allof_bases_combining_leaves_bases_unchanged(tmp_path, first_listed):
+    """Combining two bases' property-level allOf constraints builds a new
+    list for the composing class. _conjoin_property shallow-copied the
+    first base's property and appended the second's constraint to the
+    first base's own allOf list, so the base itself (shared via the class
+    registry) then rendered a constraint belonging only to the composing
+    class."""
+    proc, effective = _two_base_composition(
+        tmp_path,
+        {"things": {"allOf": [{"contains": {"$ref": "#/$defs/Widget"}}]}},
+        {"things": {"allOf": [{"contains": {"$ref": "#/$defs/Gadget"}}]}},
+        first_listed,
+    )
+    rendered = resolve_type(effective["things"])
+    assert ":ref:`Widget`" in rendered
+    assert ":ref:`Gadget`" in rendered
+
+    defs = proc.processed_schema[proc.schema_def_keyword]
+    for name, ref in (("First", "Widget"), ("Second", "Gadget")):
+        own = defs[name]["allOf"][1]["properties"]["things"]
+        assert own == {"allOf": [{"contains": {"$ref": f"#/$defs/{ref}"}}]}
+        base_effective, _required = flatten_allof(defs[name], proc)
+        assert resolve_type(base_effective["things"]) == f":ref:`{ref}`"
 
 
 @_BOTH_ORDERS

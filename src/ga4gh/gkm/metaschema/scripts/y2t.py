@@ -367,10 +367,14 @@ def _conjoin_property(first, second):
             combined[key] = min(combined[key], value)
         elif key not in _ANNOTATION_KEYS:
             extra.append({key: value})
-    for member in extra:
-        members = combined.setdefault("allOf", [])
-        if member not in members:
-            members.append(member)
+    if extra:
+        # A new list: combined is a shallow copy, so its allOf may still be
+        # the first base's own list, which other classes share.
+        members = list(combined.get("allOf", []))
+        for member in extra:
+            if member not in members:
+                members.append(member)
+        combined["allOf"] = members
     return combined
 
 
