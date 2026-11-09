@@ -25,7 +25,9 @@ $defs:
       - $refCurie: va.core:Statement
       - properties:
           proposition:
-            $refCurie: va.core:VariantOncogenicityProposition
+            oneOf:
+              - $refCurie: va.core:VariantOncogenicityProposition
+              - $refCurie: gkm.core:iriReference
             description: >-
               A proposition about the oncogenicity of a variant, for which the study provides evidence.
               The validity of this proposition, and the level of confidence/evidence supporting it,
