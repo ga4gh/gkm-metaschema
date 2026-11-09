@@ -545,3 +545,113 @@ def test_composed_description_only_override_does_not_warn(tmp_path):
         warnings.simplefilter("always")
         _build_sealed_schema(tmp_path, defs)
     assert not any(issubclass(w.category, LostIriReferenceWarning) for w in caught)
+
+
+def _lost_irireference_warnings(tmp_path, defs):
+    """Build ``defs`` and return the LostIriReferenceWarning messages emitted."""
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _build_sealed_schema(tmp_path, defs)
+    return [str(w.message) for w in caught if issubclass(w.category, LostIriReferenceWarning)]
+
+
+_WIDGET = {"$ref": "#/$defs/Widget"}
+_WIDGET_OR_IRI = {"oneOf": [{"$ref": "#/$defs/Widget"}, {"$ref": "#/$defs/iriReference"}]}
+
+
+def _irireference_chain_defs(intermediate, leaf_override):
+    """Base.thing offers iriReference; ``intermediate`` (a class def) sits
+    between Base and Leaf; Leaf composes Intermediate and overrides 'thing'
+    with ``leaf_override``."""
+    return {
+        "Base": {
+            "maturity": "draft",
+            "abstract": True,
+            "description": "A base class offering iriReference for 'thing'.",
+            "properties": {"thing": _WIDGET_OR_IRI},
+        },
+        "Widget": {"maturity": "draft", "description": "A concrete widget."},
+        "iriReference": {"maturity": "draft", "description": "An external reference."},
+        "Intermediate": {"maturity": "draft", "description": "An intermediate class.", **intermediate},
+        "Leaf": {
+            "maturity": "draft",
+            "description": "A class composing Intermediate and narrowing 'thing'.",
+            "allOf": [{"$ref": "#/$defs/Intermediate"}, {"properties": {"thing": leaf_override}}],
+        },
+    }
+
+
+_ANNOTATION_ONLY_INTERMEDIATES = {
+    "allOf": {"allOf": [{"$ref": "#/$defs/Base"}, {"properties": {"thing": {"description": "refined"}}}]},
+    "inherits": {"inherits": "Base", "properties": {"thing": {"description": "refined"}}},
+}
+
+
+@pytest.mark.parametrize("via", sorted(_ANNOTATION_ONLY_INTERMEDIATES))
+def test_composed_irireference_lost_through_annotation_only_intermediate_warns(tmp_path, via):
+    """An intermediate class that only refines 'thing''s description keeps
+    Base's iriReference alternative, so a Leaf narrowing 'thing' to a bare
+    Widget through it still loses iriReference and warns -- for an
+    intermediate that composes Base (allOf) or inherits it (PR #87 review)."""
+    defs = _irireference_chain_defs(_ANNOTATION_ONLY_INTERMEDIATES[via], _WIDGET)
+    messages = _lost_irireference_warnings(tmp_path, defs)
+    assert any("Leaf.thing" in m for m in messages)
+
+
+@pytest.mark.parametrize("via", sorted(_ANNOTATION_ONLY_INTERMEDIATES))
+def test_composed_irireference_retained_through_annotation_only_intermediate_does_not_warn(tmp_path, via):
+    """Same chain, but Leaf re-offers iriReference -- no warning."""
+    defs = _irireference_chain_defs(_ANNOTATION_ONLY_INTERMEDIATES[via], _WIDGET_OR_IRI)
+    assert _lost_irireference_warnings(tmp_path, defs) == []
+
+
+def _irireference_array_composition_defs(override):
+    """Base.things is an array whose items offer iriReference; Composed
+    overrides 'things' with ``override`` via its local allOf member."""
+    return {
+        "Base": {
+            "maturity": "draft",
+            "description": "A base class whose 'things' items offer iriReference.",
+            "properties": {"things": {"type": "array", "ordered": False, "items": _WIDGET_OR_IRI}},
+        },
+        "Widget": {"maturity": "draft", "description": "A concrete widget."},
+        "iriReference": {"maturity": "draft", "description": "An external reference."},
+        "Composed": {
+            "maturity": "draft",
+            "description": "A class composing Base and overriding 'things'.",
+            "allOf": [{"$ref": "#/$defs/Base"}, {"properties": {"things": override}}],
+        },
+    }
+
+
+def test_composed_items_only_narrowing_warns(tmp_path):
+    """An array override giving only 'items' (no repeated 'type: array')
+    still applies under allOf, so narrowing the items to a bare Widget drops
+    the base's iriReference item alternative and warns (PR #87 review)."""
+    defs = _irireference_array_composition_defs({"items": _WIDGET})
+    messages = _lost_irireference_warnings(tmp_path, defs)
+    assert any("Composed.things" in m for m in messages)
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        pytest.param({"items": {"description": "refined item"}}, id="items-annotation-only"),
+        pytest.param({"type": "array"}, id="type-only"),
+        pytest.param({"minItems": 1}, id="array-size-only"),
+        pytest.param({"items": _WIDGET_OR_IRI}, id="items-retain-irireference"),
+    ],
+)
+def test_composed_array_override_keeping_irireference_does_not_warn(tmp_path, override):
+    """Array overrides that leave the items' iriReference alternative in
+    place -- annotating the items, repeating the type, or sizing the array --
+    don't warn."""
+    defs = _irireference_array_composition_defs(override)
+    assert _lost_irireference_warnings(tmp_path, defs) == []
+
+
+def test_composed_property_forbidden_with_false_does_not_warn(tmp_path):
+    """Narrowing a property to boolean schema false forbids it outright --
+    an intentional removal, not an accidental loss of iriReference."""
+    defs = _irireference_composition_defs(False)
+    assert _lost_irireference_warnings(tmp_path, defs) == []

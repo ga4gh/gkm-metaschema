@@ -88,8 +88,8 @@
          "description": "The genetic variant for which the in silico analysis was performed."
       },
       "sourceDataSet": {
-         "$ref": "/ga4gh/schema/va-spec/1.0.0-msp.test/json/DataSet",
-         "description": "The dataset from which the in silico scores were retrieved or derived (e.g., an Ensembl VEP annotation dataset)."
+         "description": "The dataset from which the in silico scores were retrieved or derived (e.g., an Ensembl VEP annotation dataset).",
+         "$ref": "/ga4gh/schema/va-spec/1.0.0-msp.test/json/DataSet"
       },
       "ancillaryResults": {
          "maturity": "draft",

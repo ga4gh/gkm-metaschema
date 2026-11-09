@@ -62,11 +62,39 @@ def _schema_offers_irireference(node) -> bool:
     return False
 
 
-def _has_type_narrowing_keys(schema) -> bool:
-    """True if ``schema`` actually redefines a property's type (as opposed
-    to e.g. a description-only override, which doesn't affect what the
-    property accepts)."""
-    return isinstance(schema, dict) and any(k in schema for k in ("$ref", "$refCurie", "oneOf", "anyOf", "type"))
+def _merge_inherited_property(merged: dict, override: dict) -> None:
+    """Specialize an inherited property schema in place with a subclass's
+    override, the way ``inherits:`` does: a ``$ref``/``$refCurie`` replaces
+    the inherited ``oneOf``/``anyOf`` (and vice versa), then the override's
+    keys win. Annotation-only keys (description, $comment, ...) leave the
+    inherited constraints in place."""
+    if "$ref" in override or "$refCurie" in override:
+        for key in ("oneOf", "anyOf", "$ref", "$refCurie"):
+            merged.pop(key, None)
+    if "oneOf" in override or "anyOf" in override:
+        merged.pop("$ref", None)
+        merged.pop("$refCurie", None)
+    merged.update(override)
+
+
+def _compose_property(base, override):
+    """Effective schema of a property an ``allOf`` member's local override
+    further constrains, for the LostIriReferenceWarning check only. Like
+    ``inherits:`` specialization, except ``items`` composes recursively (an
+    ``allOf`` override of ``items`` intersects with, rather than replaces,
+    the base's item schema), and boolean schemas compose as JSON Schema
+    does: ``false`` absorbs, ``true`` adds nothing."""
+    if base is False or override is False:
+        return False
+    if not isinstance(override, dict):
+        return base
+    if not isinstance(base, dict):
+        return override
+    composed = copy.deepcopy(base)
+    _merge_inherited_property(composed, {k: v for k, v in override.items() if k != "items"})
+    if "items" in override:
+        composed["items"] = _compose_property(base.get("items", True), override["items"])
+    return composed
 
 
 class YamlSchemaProcessor:
@@ -619,21 +647,32 @@ class YamlSchemaProcessor:
         if class_name in _seen or class_name not in registry:
             return {}
         raw_def, _owner = registry[class_name]
-        effective = dict(raw_def.get("properties", {}))
+        effective: dict = {}
         inherits = raw_def.get("inherits")
         if isinstance(inherits, str):
             parent_name = inherits.rsplit(":", 1)[-1]
-            for name, schema in self._effective_raw_properties(parent_name, _seen | {class_name}).items():
-                effective.setdefault(name, schema)
+            effective.update(self._effective_raw_properties(parent_name, _seen | {class_name}))
+        # Own properties specialize inherited ones (an annotation-only override
+        # keeps the parent's constraints) rather than replacing them.
+        for name, schema in raw_def.get("properties", {}).items():
+            if isinstance(effective.get(name), dict) and isinstance(schema, dict):
+                merged = copy.deepcopy(effective[name])
+                _merge_inherited_property(merged, schema)
+                effective[name] = merged
+            else:
+                effective[name] = schema
         for member in raw_def.get("allOf", []):
             if not isinstance(member, dict):
                 continue
+            contributed = {}
             base_name = _ref_or_curie_target(member)
             if base_name:
-                for name, schema in self._effective_raw_properties(base_name, _seen | {class_name}).items():
-                    effective.setdefault(name, schema)
-            if "properties" in member:
-                effective.update(member["properties"])
+                contributed.update(self._effective_raw_properties(base_name, _seen | {class_name}))
+            contributed.update(member.get("properties", {}))
+            # allOf intersects every member, so each contribution composes
+            # with (rather than replaces) what earlier members established.
+            for name, schema in contributed.items():
+                effective[name] = _compose_property(effective[name], schema) if name in effective else schema
         return effective
 
     def _warn_on_lost_irireference_in_composition(self, schema_class: str, raw_class_def: dict) -> None:
@@ -666,9 +705,15 @@ class YamlSchemaProcessor:
             if "properties" in member:
                 local_overrides.update(member["properties"])
         for prop, override_schema in local_overrides.items():
-            if prop not in base_props or not _has_type_narrowing_keys(override_schema):
+            # A property narrowed to boolean schema false is deliberately
+            # forbidden, not an accidental loss of iriReference.
+            if prop not in base_props or override_schema is False:
                 continue
-            if _schema_offers_irireference(base_props[prop]) and not _schema_offers_irireference(override_schema):
+            # Compare against the composed result, not the bare override: an
+            # override that only annotates (or narrows just 'items') keeps
+            # whatever the base offers where it doesn't constrain.
+            composed = _compose_property(base_props[prop], override_schema)
+            if _schema_offers_irireference(base_props[prop]) and not _schema_offers_irireference(composed):
                 warnings.warn(
                     f"'{schema_class}.{prop}' composes a base that offers 'iriReference' "
                     "for this property, but this class's own narrowing no longer does "
@@ -808,12 +853,7 @@ class YamlSchemaProcessor:
                         )
                 had_irireference = _schema_offers_irireference(merged)
                 # reconcile polymorphic refs when the subclass narrows the type
-                if "$ref" in prop_attribs:
-                    merged.pop("oneOf", None)
-                    merged.pop("anyOf", None)
-                if "oneOf" in prop_attribs or "anyOf" in prop_attribs:
-                    merged.pop("$ref", None)
-                merged.update(prop_attribs)
+                _merge_inherited_property(merged, prop_attribs)
                 if had_irireference and not _schema_offers_irireference(merged):
                     warnings.warn(
                         f"'{schema_class}.{prop}' narrows an inherited property that "

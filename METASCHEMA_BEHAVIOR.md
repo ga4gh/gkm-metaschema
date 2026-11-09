@@ -443,9 +443,22 @@ not an error) whenever it detects this, covering both narrowing mechanisms:
   `flatten_allof`) so it also catches the case through a multi-level
   composition chain.
 
-A description-only override (no `$ref`/`$refCurie`/`oneOf`/`anyOf`/`type`
-key) never triggers this — it doesn't change what the property accepts, so
-there's nothing to lose. This is deliberately a **warning, not an error**:
+The check compares the base against the *composed* result of each override,
+not the bare override, so it only flags overrides that actually remove the
+alternative:
+
+- An annotation-only override (`description`, `$comment`, ...) keeps the
+  base's constraints, both on the class itself and anywhere further down a
+  composition/inheritance chain. A leaf narrowing through an annotation-only
+  intermediate is still checked against the original base.
+- An array override composes per item: `items: {$ref: Widget}` drops an
+  `iriReference` item alternative and warns even without repeating
+  `type: array`. Annotating `items`, repeating `type`, or sizing the array
+  (`minItems`, ...) does not warn.
+- A property narrowed to boolean schema `false` is forbidden outright on
+  purpose, so it never warns.
+
+This is deliberately a **warning, not an error**:
 excluding `iriReference` in a narrowing is sometimes intentional (e.g. a
 profile that genuinely wants to forbid external references for a specific
 property), so the processor flags it for review rather than blocking the
