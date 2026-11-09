@@ -397,6 +397,68 @@ def test_mappable_concept_anyof_renders_as_concise_sentence(gkm_core_processor, 
     assert "This class must match" not in rst
 
 
+def test_allof_property_narrowed_to_false_is_omitted(tmp_path):
+    """An allOf member may forbid a base property with the boolean schema
+    ``false`` (``properties: {id: false}``). _merge_property assumed every
+    property schema was a dict, so y2t crashed with "TypeError: argument of
+    type 'bool' is not iterable". A forbidden property must instead get no
+    row in the Information Model table -- including a base-required one, and
+    in a class composing the narrowed class, which can't permit it again.
+    ``true`` adds no constraint, so the base property is kept as-is.
+    """
+    schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://example.org/schema/narrow/narrow-source.yaml",
+        "title": "Narrow",
+        "type": "object",
+        "$defs": {
+            "Coding": {
+                "maturity": "draft",
+                "description": "A coding.",
+                "properties": {
+                    "id": {"type": "string", "description": "The id."},
+                    "code": {"type": "string", "description": "The code."},
+                    "name": {"type": "string", "description": "The name."},
+                },
+                "required": ["code", "name"],
+            },
+            "NarrowCoding": {
+                "maturity": "draft",
+                "description": "A Coding with no id or name.",
+                "allOf": [
+                    {"$ref": "#/$defs/Coding"},
+                    {"type": "object", "properties": {"id": False, "name": False, "code": True}},
+                ],
+            },
+            "NarrowerCoding": {
+                "maturity": "draft",
+                "description": "Composes NarrowCoding and redeclares id.",
+                "allOf": [
+                    {"$ref": "#/$defs/NarrowCoding"},
+                    {"type": "object", "properties": {"id": {"type": "string", "description": "Again."}}},
+                ],
+            },
+        },
+    }
+    fp = tmp_path / "narrow-source.yaml"
+    fp.write_text(yaml.safe_dump(schema))
+    proc = YamlSchemaProcessor(fp)
+    defs = proc.processed_schema[proc.schema_def_keyword]
+
+    effective, _required = flatten_allof(defs["NarrowCoding"], proc)
+    assert effective["id"] is False
+    assert effective["name"] is False
+    assert effective["code"] == {"type": "string", "description": "The code."}
+    effective, _required = flatten_allof(defs["NarrowerCoding"], proc)
+    assert effective["id"] is False
+
+    for class_name in ("NarrowCoding", "NarrowerCoding"):
+        rst = _render_one(proc, class_name, tmp_path)
+        assert "   *  - code\n" in rst
+        assert "   *  - id\n" not in rst
+        assert "   *  - name\n" not in rst
+
+
 def test_flatten_allof_recurses_through_composed_base(tmp_path):
     """flatten_allof only read a referenced base's top-level `properties` --
     a single level. DiagnosticEvidenceLine's allOf base, AmpAscoCapEvidenceLine,

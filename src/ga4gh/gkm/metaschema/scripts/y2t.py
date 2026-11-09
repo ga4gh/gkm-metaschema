@@ -264,7 +264,15 @@ def _merge_property(base: dict, refinement: dict) -> dict:
     type-signal keys are dropped first so the narrower type replaces the base's
     rather than colliding with it; otherwise base facets (e.g. ``type: array`` /
     ``items``) survive alongside the refinement (e.g. ``contains``/``minItems``).
+
+    Either side may be a JSON Schema boolean schema. allOf is a conjunction, so
+    ``false`` (the property is forbidden) absorbs everything -- no later member
+    can permit it again -- and ``true`` adds no constraint.
     """
+    if base is False or refinement is False:
+        return False
+    if refinement is True:
+        return base
     merged = dict(base)
     if any(key in refinement for key in _TYPE_KEYS):
         for key in _TYPE_KEYS:
@@ -286,6 +294,10 @@ def flatten_allof(class_definition: dict, proc: YamlSchemaProcessor, _seen: froz
     recipe/profile class, rather than a plain entity) is flattened recursively,
     so its own composed properties (and its base's, transitively) are picked up
     too, not silently dropped. ``_seen`` guards against a cyclic ``allOf`` chain.
+
+    A property narrowed to the boolean schema ``false`` (forbidden) stays in the
+    effective set as ``False``, so a class composing this one still sees it as
+    forbidden; ``render_information_model`` leaves it out of the table.
     """
     registry = _class_registry(proc)
     effective: dict = {}
@@ -567,8 +579,10 @@ def render_additional_constraints(f, class_definition: dict) -> bool:
 def render_information_model(f, properties: dict, required: list, note: str = "") -> None:
     """Render an Information Model list-table for a property set.
 
-    Shared by ordinary classes and allOf-composed classes.
+    Shared by ordinary classes and allOf-composed classes. A property whose
+    schema is ``false`` (forbidden, e.g. narrowed away in an allOf) gets no row.
     """
+    properties = {name: attribs for name, attribs in properties.items() if attribs is not False}
     if not properties:
         return
     print(
