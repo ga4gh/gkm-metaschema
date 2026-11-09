@@ -78,7 +78,9 @@ $defs:
       - $refCurie: va.core:Statement
       - properties:
           proposition:
-            $refCurie: va.core:VariantClinicalSignificanceProposition
+            oneOf:
+              - $refCurie: va.core:VariantClinicalSignificanceProposition
+              - $refCurie: gkm.core:iriReference
           strength:
             description: >-
               The strength of support that the Statement is determined to provide for or against the Variant Clinical Significance Proposition
