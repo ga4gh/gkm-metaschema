@@ -56,7 +56,9 @@ def resolve_type(class_property_definition: dict) -> str:
 
     Returns "_Not Specified_" if undetermined. Arrays report their effective
     item type (a narrowing ``contains`` wins over ``items``); ``allOf`` resolves
-    to its primary member; $ref/$refCurie are shown as the bare class name.
+    to its primary member, plus any further member that is only a type
+    (unrelated types two allOf bases both require), joined by ``&``;
+    $ref/$refCurie are shown as the bare class name.
     """
     d = class_property_definition
     if not isinstance(d, dict):
@@ -70,11 +72,17 @@ def resolve_type(class_property_definition: dict) -> str:
     if "$refCurie" in d:
         return f":ref:`{_ref_label(d['$refCurie'])}`"
     if "allOf" in d:
+        types: list = []
         for member in d["allOf"]:
+            # After the primary type, only a bare type signal (as
+            # _conjoin_property keeps for unrelated base types) is another
+            # type; a member constraining the object's fields refines it.
+            if types and not (isinstance(member, dict) and set(member) <= set(_TYPE_KEYS)):
+                continue
             resolved = resolve_type(member)
-            if resolved != "_Not Specified_":
-                return resolved
-        return "_Not Specified_"
+            if resolved != "_Not Specified_" and resolved not in types:
+                types.append(resolved)
+        return " & ".join(types) if types else "_Not Specified_"
     if "oneOf" in d or "anyOf" in d:
         kw = "anyOf" if "anyOf" in d else "oneOf"
         deprecated_types = d.get("deprecated", [])
@@ -281,6 +289,91 @@ def _merge_property(base: dict, refinement: dict) -> dict:
     return merged
 
 
+# Annotations don't constrain values, so two bases' differing annotations can't
+# be combined; the first-listed base's is shown.
+_ANNOTATION_KEYS = ("description", "$comment", "title", "examples", "maturity", "ordered", "deprecated")
+# Bounds combine to the tighter of the two.
+_LOWER_BOUNDS = ("minimum", "exclusiveMinimum", "minLength", "minItems", "minProperties", "minContains")
+_UPPER_BOUNDS = ("maximum", "exclusiveMaximum", "maxLength", "maxItems", "maxProperties", "maxContains")
+
+
+def _type_alternatives(signal: dict) -> set | None:
+    """The set of types a property's type-signal keys allow, as labels, or
+    None when they can't be compared as a plain set (e.g. an inline schema
+    among ``oneOf`` alternatives, or several type keys at once)."""
+    if len(signal) != 1:
+        return None
+    key, value = next(iter(signal.items()))
+    if key in ("$ref", "$refCurie"):
+        return {_ref_label(value)}
+    if key == "type":
+        return {f"type:{value}"}
+    alternatives = set()
+    for member in value:
+        ref = member.get("$ref") or member.get("$refCurie") if isinstance(member, dict) else None
+        if not ref or len(member) != 1:
+            return None
+        alternatives.add(_ref_label(ref))
+    return alternatives
+
+
+def _conjoin_property(first, second):
+    """Effective schema of a property two allOf-referenced bases both define.
+
+    allOf is a conjunction, so both bases' constraints apply, whatever order
+    the bases are listed in: ``false`` absorbs; when one base's type
+    alternatives are a subset of the other's, the narrower wins; unrelated
+    types are both kept (as a property-level ``allOf``, which ``resolve_type``
+    shows joined by ``&``); bounds combine to the tighter of the two;
+    ``items`` combine recursively; any other differing constraint (e.g. a
+    second ``pattern`` or ``contains``) is kept in the ``allOf``. Differing
+    annotations (``_ANNOTATION_KEYS``) can't be combined, so the first-listed
+    base's is shown.
+    """
+    if first is False or second is False:
+        return False
+    if not isinstance(second, dict) or first == second:
+        return first
+    if not isinstance(first, dict):
+        return second
+    first_signal = {key: first[key] for key in _TYPE_KEYS if key in first}
+    second_signal = {key: second[key] for key in _TYPE_KEYS if key in second}
+    combined = {key: value for key, value in first.items() if key not in _TYPE_KEYS}
+    extra = []
+    if not second_signal or first_signal == second_signal:
+        combined.update(first_signal)
+    elif not first_signal:
+        combined.update(second_signal)
+    else:
+        first_types, second_types = _type_alternatives(first_signal), _type_alternatives(second_signal)
+        if first_types is not None and second_types is not None and first_types <= second_types:
+            combined.update(first_signal)
+        elif first_types is not None and second_types is not None and second_types <= first_types:
+            combined.update(second_signal)
+        else:
+            extra += [first_signal, second_signal]
+    for key, value in second.items():
+        if key in _TYPE_KEYS or combined.get(key) == value:
+            continue
+        if key not in combined:
+            combined[key] = value
+        elif key == "items":
+            combined[key] = _conjoin_property(combined[key], value)
+        elif key == "allOf":
+            extra += value
+        elif key in _LOWER_BOUNDS:
+            combined[key] = max(combined[key], value)
+        elif key in _UPPER_BOUNDS:
+            combined[key] = min(combined[key], value)
+        elif key not in _ANNOTATION_KEYS:
+            extra.append({key: value})
+    for member in extra:
+        members = combined.setdefault("allOf", [])
+        if member not in members:
+            members.append(member)
+    return combined
+
+
 def flatten_allof(class_definition: dict, proc: YamlSchemaProcessor, _seen: frozenset = frozenset()):
     """Flatten an allOf-composed class to its effective property set.
 
@@ -297,9 +390,13 @@ def flatten_allof(class_definition: dict, proc: YamlSchemaProcessor, _seen: froz
 
     A property narrowed to the boolean schema ``false`` (forbidden) stays in the
     effective set as ``False``, so a class composing this one still sees it as
-    forbidden; ``render_information_model`` leaves it out of the table. A
-    ``false`` from any referenced base wins over another base's schema for the
-    same property, regardless of the order the bases are listed in.
+    forbidden; ``render_information_model`` leaves it out of the table.
+
+    When several referenced bases define the same property, their schemas are
+    combined with ``_conjoin_property`` (allOf is a conjunction), so the result
+    doesn't depend on the order the bases are listed in -- except for a
+    differing annotation such as ``description``, where the first-listed
+    base's is shown. A ``false`` from any base keeps the property forbidden.
     """
     registry = _class_registry(proc)
     effective: dict = {}
@@ -313,13 +410,8 @@ def flatten_allof(class_definition: dict, proc: YamlSchemaProcessor, _seen: froz
             else:
                 base_effective, base_required = base.get("properties", {}), base.get("required", [])
             for name, attribs in base_effective.items():
-                # allOf is a conjunction: a property any referenced base
-                # forbids stays forbidden whatever order the bases appear in
-                # (reassigning an existing key keeps its position).
-                if attribs is False:
-                    effective[name] = False
-                else:
-                    effective.setdefault(name, attribs)
+                # Reassigning an existing key keeps its position.
+                effective[name] = _conjoin_property(effective[name], attribs) if name in effective else attribs
             required.update(base_required)
         if "properties" in member:
             for name, attribs in member["properties"].items():

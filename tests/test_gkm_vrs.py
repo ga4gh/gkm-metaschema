@@ -27,6 +27,8 @@ from ga4gh.gkm.metaschema.scripts.y2t import describe_composition_member
 from ga4gh.gkm.metaschema.scripts.y2t import flatten_allof
 from ga4gh.gkm.metaschema.scripts.y2t import main as y2t
 from ga4gh.gkm.metaschema.scripts.y2t import render_class
+from ga4gh.gkm.metaschema.scripts.y2t import resolve_cardinality
+from ga4gh.gkm.metaschema.scripts.y2t import resolve_type
 from ga4gh.gkm.metaschema.tools.source_proc import YamlSchemaProcessor
 
 root = Path(__file__).parent
@@ -513,6 +515,149 @@ def test_allof_false_from_any_referenced_base_is_omitted(tmp_path, narrow_first)
     rst = _render_one(proc, "BothCoding", tmp_path)
     assert "   *  - id\n" not in rst
     assert rst.index("   *  - code\n") < rst.index("   *  - system\n")
+
+
+def _two_base_composition(tmp_path, first_props, second_props, first_listed):
+    """A Coding base, two classes each composing Coding and overriding some of
+    its properties (``first_props`` / ``second_props``), and ``Both``, which
+    composes the two -- listing ``first_listed`` ("First" or "Second") first.
+    Returns ``(processor, effective_properties_of_Both)``."""
+    widget_or_iri = {"oneOf": [{"$ref": "#/$defs/Widget"}, {"$ref": "#/$defs/iriReference"}]}
+    coding_ref = {"$ref": "#/$defs/Coding"}
+    names = ["First", "Second"] if first_listed == "First" else ["Second", "First"]
+    schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://example.org/schema/conj/conj-source.yaml",
+        "title": "Conj",
+        "type": "object",
+        "$defs": {
+            "Widget": {"maturity": "draft", "description": "A widget."},
+            "Gadget": {"maturity": "draft", "description": "A gadget."},
+            "iriReference": {"maturity": "draft", "description": "An external reference."},
+            "Coding": {
+                "maturity": "draft",
+                "description": "A coding.",
+                "properties": {
+                    "code": {"type": "string", "description": "The code."},
+                    "thing": {**widget_or_iri, "description": "A thing."},
+                    "things": {"type": "array", "ordered": False, "items": widget_or_iri, "description": "Things."},
+                },
+            },
+            "First": {
+                "maturity": "draft",
+                "description": "First narrowing.",
+                "allOf": [coding_ref, {"type": "object", "properties": first_props}],
+            },
+            "Second": {
+                "maturity": "draft",
+                "description": "Second narrowing.",
+                "allOf": [coding_ref, {"type": "object", "properties": second_props}],
+            },
+            "Both": {
+                "maturity": "draft",
+                "description": "Composes both narrowings.",
+                "allOf": [{"$ref": f"#/$defs/{name}"} for name in names],
+            },
+        },
+    }
+    fp = tmp_path / "conj-source.yaml"
+    fp.write_text(yaml.safe_dump(schema))
+    proc = YamlSchemaProcessor(fp)
+    effective, _required = flatten_allof(proc.processed_schema[proc.schema_def_keyword]["Both"], proc)
+    return proc, effective
+
+
+_BOTH_ORDERS = pytest.mark.parametrize("first_listed", ["First", "Second"])
+
+
+@_BOTH_ORDERS
+def test_allof_bases_keep_both_constraints(tmp_path, first_listed):
+    """allOf is a conjunction, so when two referenced bases each constrain the
+    same property, both constraints apply, whatever order the bases are
+    listed in. flatten_allof kept only the first-listed base's schema (#91)."""
+    _proc, effective = _two_base_composition(
+        tmp_path, {"code": {"pattern": "^[0-9]+-[0-9]$"}}, {"code": {"maxLength": 8}}, first_listed
+    )
+    assert effective["code"]["type"] == "string"
+    assert effective["code"]["pattern"] == "^[0-9]+-[0-9]$"
+    assert effective["code"]["maxLength"] == 8
+
+
+@_BOTH_ORDERS
+def test_allof_bases_narrower_type_wins(tmp_path, first_listed):
+    """One base narrows 'thing' to Widget; the other only refines its
+    description and so still offers Widget | iriReference. The intersection
+    is Widget, whatever order the bases are listed in."""
+    _proc, effective = _two_base_composition(
+        tmp_path, {"thing": {"$ref": "#/$defs/Widget"}}, {"thing": {"description": "Refined."}}, first_listed
+    )
+    assert resolve_type(effective["thing"]) == ":ref:`Widget`"
+
+
+@_BOTH_ORDERS
+def test_allof_bases_conflicting_types_both_shown(tmp_path, first_listed):
+    """Bases narrowing 'thing' to unrelated types must both hold, so the Type
+    column shows both rather than whichever base is listed first."""
+    _proc, effective = _two_base_composition(
+        tmp_path, {"thing": {"$ref": "#/$defs/Widget"}}, {"thing": {"$ref": "#/$defs/Gadget"}}, first_listed
+    )
+    rendered = resolve_type(effective["thing"])
+    assert ":ref:`Widget`" in rendered
+    assert ":ref:`Gadget`" in rendered
+
+
+def test_resolve_type_allof_refinement_member_is_not_a_second_type():
+    """A property-level allOf whose later member only constrains the
+    referenced object's fields (e.g. recipes' DefiningAlleleConstraint with
+    a 'relations' narrowing) resolves to the primary type alone; only a bare
+    type member counts as a second type."""
+    refined = {
+        "allOf": [
+            {"$ref": "#/$defs/DefiningAlleleConstraint"},
+            {"type": "object", "properties": {"relations": {"minItems": 1}}},
+        ]
+    }
+    assert resolve_type(refined) == ":ref:`DefiningAlleleConstraint`"
+    both = {"allOf": [{"$ref": "#/$defs/Widget"}, {"$ref": "#/$defs/Gadget"}]}
+    assert resolve_type(both) == ":ref:`Widget` & :ref:`Gadget`"
+
+
+@_BOTH_ORDERS
+def test_allof_bases_array_limits_combine(tmp_path, first_listed):
+    """Array size limits from two bases combine to the tighter of each:
+    the larger minItems and the smaller maxItems."""
+    proc, effective = _two_base_composition(
+        tmp_path, {"things": {"minItems": 1, "maxItems": 5}}, {"things": {"minItems": 2, "maxItems": 3}}, first_listed
+    )
+    assert resolve_cardinality("things", effective["things"], {"required": []}) == "2..3"
+    rst = _render_one(proc, "Both", tmp_path)
+    assert "   *  - things\n" in rst
+
+
+@_BOTH_ORDERS
+def test_allof_bases_contains_both_shown(tmp_path, first_listed):
+    """Each base requiring the array to contain a different type means both
+    are required, so the Type column shows both."""
+    _proc, effective = _two_base_composition(
+        tmp_path,
+        {"things": {"contains": {"$ref": "#/$defs/Widget"}}},
+        {"things": {"contains": {"$ref": "#/$defs/Gadget"}}},
+        first_listed,
+    )
+    rendered = resolve_type(effective["things"])
+    assert ":ref:`Widget`" in rendered
+    assert ":ref:`Gadget`" in rendered
+
+
+@_BOTH_ORDERS
+def test_allof_bases_first_listed_description_shown(tmp_path, first_listed):
+    """Descriptions are annotations, not constraints, and can't be combined
+    meaningfully: when both bases refine one, the first-listed base's is
+    shown (a deterministic choice, documented on flatten_allof)."""
+    _proc, effective = _two_base_composition(
+        tmp_path, {"code": {"description": "First's code."}}, {"code": {"description": "Second's code."}}, first_listed
+    )
+    assert effective["code"]["description"] == f"{first_listed}'s code."
 
 
 def test_flatten_allof_recurses_through_composed_base(tmp_path):
