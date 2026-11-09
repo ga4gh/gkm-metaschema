@@ -449,7 +449,11 @@ def test_statement_proposition_retains_irireference(tmp_path):
     assert any(m.get("$ref", "").endswith("/iriReference") for m in prop_oneof)
 
     cases = [
-        ("aac-2017-profile-source.yaml", "VariantClinicalSignificanceStatement", "VariantClinicalSignificanceProposition"),
+        (
+            "aac-2017-profile-source.yaml",
+            "VariantClinicalSignificanceStatement",
+            "VariantClinicalSignificanceProposition",
+        ),
         ("acmg-2015-profile-source.yaml", "VariantPathogenicityStatement", "VariantPathogenicityProposition"),
         ("ccv-2022-profile-source.yaml", "VariantOncogenicityStatement", "VariantOncogenicityProposition"),
     ]
@@ -457,7 +461,9 @@ def test_statement_proposition_retains_irireference(tmp_path):
         proc = YamlSchemaProcessor(root / f"data/va-spec/{source_name}")
         class_def = proc.processed_schema[proc.schema_def_keyword][class_name]
         local_override = class_def["allOf"][1]["properties"]["proposition"]
-        assert "oneOf" in local_override, f"{class_name}.proposition is a bare $ref -- excludes iriReference via allOf intersection"
+        assert "oneOf" in local_override, (
+            f"{class_name}.proposition is a bare $ref -- excludes iriReference via allOf intersection"
+        )
         member_refs = [m.get("$ref", "") for m in local_override["oneOf"]]
         assert any(r.endswith(f"/{proposition_name}") for r in member_refs)
         assert any(r.endswith("/iriReference") for r in member_refs)
