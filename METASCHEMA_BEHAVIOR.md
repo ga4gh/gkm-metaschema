@@ -211,7 +211,19 @@ Why the distinction matters:
     a profile class composing another profile class rather than a plain
     entity) is flattened **recursively**, so its own composed properties (and
     its base's, transitively) are picked up too — not silently dropped, which
-    a single-level lookup would do. `oneOf`/`anyOf` unions render a "one of /
+    a single-level lookup would do. A property narrowed to the boolean schema
+    `false` (e.g. `extensions: false` in a profile, meaning "must not be
+    present") is **left out of the table**, and stays forbidden for any
+    class composing this one. When **several referenced bases define the
+    same property**, the row shows their combined schema — `allOf` is a
+    conjunction, so the result doesn't depend on the order the bases are
+    listed in: a `false` from any base keeps the property forbidden; when
+    one base's type alternatives are a subset of the other's, the narrower
+    type wins; unrelated types are both shown, joined by `&` (e.g.
+    `Foo & Bar`); bounds (`minimum`, `maxItems`, ...) take the tighter
+    value; `items` combine recursively. Only annotations (`description`,
+    `$comment`, ...) can't be combined, so the first-listed base's is
+    shown. `oneOf`/`anyOf` unions render a "one of /
     any of the following" summary, describing each member by whichever of
     its shape it has: a `$ref`/`$refCurie`/nested `oneOf`/`anyOf` (the
     referenced type), a `properties` narrowing ("an object constraining
@@ -477,6 +489,13 @@ build.
   [§6](#6-references)), but there's no holistic "shape of the source file"
   validation pass; adding one would need to enumerate the checks and decide how
   strict to be, not just patch one more case.
+- **A `false` property on an `inherits:` subclass crashes the processor.**
+  Forbidding an inherited property with the boolean schema `false` works in
+  an `allOf`-composed class (e.g. a profile — see [§8](#8-outputs)), but
+  declaring it directly under an inheriting class's `properties` (e.g.
+  `inherits: Base` with `properties: {name: false}`) raises a `TypeError`
+  in `YamlSchemaProcessor`, which expects every property schema to be a
+  dict. Use `allOf` composition to prohibit an inherited property.
 - **Test scope.** Automated tests cover every `*-source.yaml` currently in
   this repo (`gkm-core`, `vrs`, `cat-vrs`, `recipes`, and the `va-spec`
   schemas: `domain-entities`, `va-core`, and the `aac-2017` / `acmg-2015` /
@@ -498,7 +517,9 @@ build.
   accepting composed properties.
 - [`tests/test_gkm_vrs.py`](tests/test_gkm_vrs.py) — build, output-generation,
   ordering, abstract-emission, direct-ref, and `extends`-rejection checks
-  across the in-scope schemas.
+  across the in-scope schemas, plus `y2t` rendering checks (e.g. the
+  flattened `allOf` property table's handling of `false` narrowings and of a
+  property several bases define).
 
 Run everything with `make test` (or `pytest tests/`).
 
@@ -614,3 +635,14 @@ Behaviors intentionally **removed / changed** during the migration:
   this class of bug — schema-covariance-valid, so nothing else catches it —
   gets flagged automatically going forward instead of relying on manual
   audits.
+- `flatten_allof` now handles a property narrowed to the boolean schema
+  `false` (forbidden): it's left out of the **Information Model** table and
+  stays forbidden through further composition. Previously `y2t` crashed on
+  it, since it expected every property schema to be a dict — blocking docs
+  generation for any profile that prohibits an inherited property (see
+  [§8](#8-outputs)).
+- `flatten_allof` now **combines** a property that several referenced bases
+  define, instead of letting the last-listed base's schema overwrite the
+  others'. The table therefore no longer depends on the order the bases are
+  listed in, and shows the property's actual effective type and bounds (see
+  [§8](#8-outputs)).
