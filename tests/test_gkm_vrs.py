@@ -626,6 +626,28 @@ def test_resolve_type_allof_refinement_member_is_not_a_second_type():
     assert resolve_type(both) == ":ref:`Widget` & :ref:`Gadget`"
 
 
+def test_resolve_type_anyof_deduplicates_identical_types():
+    """anyOf/oneOf branches that resolve to the same concrete type label are
+    deduplicated so e.g. string with enum and unconstrained string collapse
+    to 'string' instead of 'string | string' (#96)."""
+    prop = {
+        "anyOf": [
+            {"type": "string", "enum": ["Condition", "Phenotype", "Disease", "Trait", "Absent"]},
+            {"type": "string"},
+        ]
+    }
+    assert resolve_type(prop) == "string"
+
+    distinct = {
+        "oneOf": [
+            {"type": "string"},
+            {"type": "integer"},
+            {"type": "string"},
+        ]
+    }
+    assert resolve_type(distinct) == "string | integer"
+
+
 @_BOTH_ORDERS
 def test_allof_bases_array_limits_combine(tmp_path, first_listed):
     """Array size limits from two bases combine to the tighter of each:

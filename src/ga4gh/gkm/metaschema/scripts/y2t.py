@@ -91,9 +91,12 @@ def resolve_type(class_property_definition: dict) -> str:
         for property_type in d[kw]:
             resolved_type = resolve_type(property_type)
             if property_type in deprecated_types:
-                resolved_deprecated.append(resolved_type + " (deprecated)")
+                label = resolved_type + " (deprecated)"
+                if label not in resolved_deprecated:
+                    resolved_deprecated.append(label)
             else:
-                resolved_active.append(resolved_type)
+                if resolved_type not in resolved_active:
+                    resolved_active.append(resolved_type)
         return " | ".join(resolved_active + resolved_deprecated)
     return "_Not Specified_"
 
