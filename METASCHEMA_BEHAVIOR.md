@@ -489,13 +489,14 @@ build.
   [§6](#6-references)), but there's no holistic "shape of the source file"
   validation pass; adding one would need to enumerate the checks and decide how
   strict to be, not just patch one more case.
-- **A `false` property on an `inherits:` subclass crashes the processor.**
-  Forbidding an inherited property with the boolean schema `false` works in
-  an `allOf`-composed class (e.g. a profile — see [§8](#8-outputs)), but
-  declaring it directly under an inheriting class's `properties` (e.g.
-  `inherits: Base` with `properties: {name: false}`) raises a `TypeError`
-  in `YamlSchemaProcessor`, which expects every property schema to be a
-  dict. Use `allOf` composition to prohibit an inherited property.
+- **A boolean property schema directly under a class's `properties` is
+  rejected.** Forbidding an inherited property with the boolean schema `false`
+  works in an `allOf`-composed class (e.g. a profile — see
+  [§8](#8-outputs)), but declaring it directly under a class's `properties`
+  (e.g. `inherits: Base` with `properties: {name: false}`) is not supported:
+  `YamlSchemaProcessor` expects every property schema to be a mapping, and
+  raises a `ValueError` naming the class and property. Use `allOf`
+  composition to prohibit an inherited property.
 - **Test scope.** Automated tests cover every `*-source.yaml` currently in
   this repo (`gkm-core`, `vrs`, `cat-vrs`, `recipes`, and the `va-spec`
   schemas: `domain-entities`, `va-core`, and the `aac-2017` / `acmg-2015` /

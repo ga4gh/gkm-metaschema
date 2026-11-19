@@ -819,6 +819,19 @@ class YamlSchemaProcessor:
 
         specialized = []
         for prop, prop_attribs in processed_class_properties.items():
+            # A property schema must be a mapping. A boolean schema (e.g. 'false' to
+            # forbid a property) is valid JSON Schema but is not supported directly
+            # under a class's 'properties'; fail with a clear message rather than an
+            # opaque TypeError/AttributeError further down this loop.
+            if not isinstance(prop_attribs, dict):
+                raise ValueError(
+                    f"Property '{schema_class}.{prop}' has a non-mapping schema "
+                    f"({prop_attribs!r}). Boolean property schemas (such as 'false' to "
+                    "forbid a property) are not supported directly under a class's "
+                    f"'properties'. Fix: give '{prop}' a mapping of constraints, or, to "
+                    "prohibit an inherited property, use 'allOf' composition instead "
+                    "(see METASCHEMA_BEHAVIOR.md, Known limitations)."
+                )
             # 'extends' no longer exists. A subclass specializes an inherited
             # property by redeclaring it under the same name; it cannot rename.
             if "extends" in prop_attribs:

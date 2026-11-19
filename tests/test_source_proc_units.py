@@ -681,3 +681,70 @@ def test_inherited_ref_override_keeps_key_position(tmp_path):
     thing = proc.for_js["$defs"]["Child"]["properties"]["thing"]
     assert list(thing) == ["$ref", "description"]
     assert thing["$ref"].endswith("Gadget")
+
+
+# --- boolean property schemas directly under a class's ``properties`` --------
+
+
+def _build_class_with_property(tmp_path, class_def, base_def=None):
+    """Write a minimal source schema and run it through the processor."""
+    defs = {}
+    if base_def is not None:
+        defs["Base"] = base_def
+    defs["Target"] = class_def
+    schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://example.org/schema/bool/bool-source.yaml",
+        "title": "Bool",
+        "type": "object",
+        "$defs": defs,
+    }
+    fp = tmp_path / "bool-source.yaml"
+    with open(fp, "w") as f:
+        yaml.safe_dump(schema, f)
+    return YamlSchemaProcessor(fp)
+
+
+_BASE = {
+    "maturity": "draft",
+    "abstract": True,
+    "type": "object",
+    "properties": {"id": {"type": "string"}, "name": {"type": "string"}},
+}
+
+
+@pytest.mark.parametrize("bool_value", [False, True])
+def test_boolean_property_schema_on_inherits_class_is_rejected(tmp_path, bool_value):
+    """A boolean property schema on an ``inherits:`` class used to crash with an
+    opaque TypeError; it must raise a ValueError naming the class and property."""
+    child = {
+        "maturity": "draft",
+        "inherits": "Base",
+        "description": "child",
+        "properties": {"name": bool_value},
+    }
+    with pytest.raises(ValueError, match=r"(?i)Target\.name.*boolean.*allOf"):
+        _build_class_with_property(tmp_path, child, base_def=_BASE)
+
+
+def test_boolean_property_schema_on_plain_class_is_rejected(tmp_path):
+    """Same guard for a class that does not inherit from anything."""
+    plain = {
+        "maturity": "draft",
+        "description": "plain",
+        "properties": {"name": False},
+    }
+    with pytest.raises(ValueError, match=r"(?i)Target\.name.*boolean.*allOf"):
+        _build_class_with_property(tmp_path, plain)
+
+
+def test_boolean_property_schema_on_abstract_class_is_rejected(tmp_path):
+    """Abstract classes go through the same property loop."""
+    abstract = {
+        "maturity": "draft",
+        "abstract": True,
+        "type": "object",
+        "properties": {"name": False},
+    }
+    with pytest.raises(ValueError, match=r"(?i)Target\.name.*boolean.*allOf"):
+        _build_class_with_property(tmp_path, abstract)
